@@ -7,6 +7,23 @@ sim.out
 sim_*
 !sim_*.v
 sim_out/
+# firmware/build/: ELF, .mem, disassembly do scripts/build_firmware.py sinh lại được
+firmware/build/
+# outfeed/: chỉ giữ kết quả FIR RTL (outfeed/test_*/actual.dat), bỏ file build XSim
+/outfeed/tb_*/
+# File phụ của XSim (xvlog.pb, xelab.pb, xsim_*.backup.*) nếu chạy tay ngoài outfeed/
+*.pb
+*.backup.*
+# KHÔNG ignore *.mem / *.dat: là dữ liệu nguồn (ROM hệ số + shift_reg của IP trong
+# rtl/Peripherals/FIR11/, vector data_test/fir_test/output/, dataset data_test/fir_1000/).
+# program.mem / data.mem / symbols.mem chỉ sinh trong firmware/build/ và outfeed/tb_*/.
+
+# File tạm / backup của editor
+*~
+*.bak
+*.orig
+*.swp
+*.tmp
 work/
 transcript
 modelsim.ini

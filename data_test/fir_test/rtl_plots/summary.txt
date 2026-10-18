@@ -1,0 +1,102 @@
+==============================================================================
+FIR11 RTL vs PYTHON REFERENCE - PHÂN TÍCH KẾT QUẢ MÔ PHỎNG
+==============================================================================
+input/expected : data_test/fir_test/output/<test>/
+actual (RTL)   : outfeed/<test>/actual.dat  (tb_fir11_vectors.v, +OUT_DIR)
+Hệ số HLS      : [54, 0, -92, 0, 313, 500, 313, 0, -92, 0, 54]  (hls/FIR11/FIR11/fir.cpp, khớp output/coeff.dat)
+So sánh        : error[n] = actual[n] - expected[n], số nguyên signed 32-bit, không tolerance, không dịch chuỗi
+Độ lợi         : fit LS đồng thời (DC + tần số input có), n = 10..999; Gain = 20log10(A_out/SCALE / A_in)
+
+[test_01_low] Sin 500 Hz
+  Mẫu kiểm tra     : 1000
+  Khớp / không khớp: 1000 / 0
+  max |error|      : 0
+  Bit-exact        : PASS
+  Gain  500 Hz     : đo RTL -0.112 dB (±0.000, 1σ) | đo Expected -0.112 dB | lý thuyết -0.112 dB | A_in=1000.02, A_out/SCALE=987.230
+  -> data_test/fir_test/rtl_plots/test_01_low/time_domain.png (+ .svg)
+  -> data_test/fir_test/rtl_plots/test_01_low/frequency_domain.png (+ .svg)
+  -> data_test/fir_test/rtl_plots/test_01_low/error.png (+ .svg)
+
+[test_02_high] Sin 4000 Hz
+  Mẫu kiểm tra     : 1000
+  Khớp / không khớp: 1000 / 0
+  max |error|      : 0
+  Bit-exact        : PASS
+  Gain 4000 Hz     : đo RTL -26.995 dB (±0.002, 1σ) | đo Expected -26.995 dB | lý thuyết -26.995 dB | A_in=399.62, A_out/SCALE=17.862
+  -> data_test/fir_test/rtl_plots/test_02_high/time_domain.png (+ .svg)
+  -> data_test/fir_test/rtl_plots/test_02_high/frequency_domain.png (+ .svg)
+  -> data_test/fir_test/rtl_plots/test_02_high/error.png (+ .svg)
+
+[test_03_mixed] 500 Hz + 4000 Hz
+  Mẫu kiểm tra     : 1000
+  Khớp / không khớp: 1000 / 0
+  max |error|      : 0
+  Bit-exact        : PASS
+  Gain  500 Hz     : đo RTL -0.112 dB (±0.000, 1σ) | đo Expected -0.112 dB | lý thuyết -0.112 dB | A_in=999.90, A_out/SCALE=987.115
+  Gain 4000 Hz     : đo RTL -26.995 dB (±0.003, 1σ) | đo Expected -26.995 dB | lý thuyết -26.995 dB | A_in=399.82, A_out/SCALE=17.870
+  -> data_test/fir_test/rtl_plots/test_03_mixed/time_domain.png (+ .svg)
+  -> data_test/fir_test/rtl_plots/test_03_mixed/frequency_domain.png (+ .svg)
+  -> data_test/fir_test/rtl_plots/test_03_mixed/error.png (+ .svg)
+
+[test_04_noise] 500 Hz + 4000 Hz + nhiễu Gauss
+  Mẫu kiểm tra     : 1000
+  Khớp / không khớp: 1000 / 0
+  max |error|      : 0
+  Bit-exact        : PASS
+  Gain  500 Hz     : đo RTL -0.113 dB (±0.043, 1σ) | đo Expected -0.113 dB | lý thuyết -0.112 dB | A_in=997.31, A_out/SCALE=984.424
+  Gain 4000 Hz     : đo RTL -27.043 dB (±2.376, 1σ) | đo Expected -27.043 dB | lý thuyết -26.995 dB | A_in=396.79, A_out/SCALE=17.637
+  -> data_test/fir_test/rtl_plots/test_04_noise/time_domain.png (+ .svg)
+  -> data_test/fir_test/rtl_plots/test_04_noise/frequency_domain.png (+ .svg)
+  -> data_test/fir_test/rtl_plots/test_04_noise/error.png (+ .svg)
+
+[test_05_impulse] Đáp ứng xung (x[0] = 1000)
+  Mẫu kiểm tra     : 1000
+  Khớp / không khớp: 1000 / 0
+  max |error|      : 0
+  Bit-exact        : PASS
+  |H(500 Hz)| từ xung: đo RTL -0.112 dB | lý thuyết -0.112 dB
+  |H(4000 Hz)| từ xung: đo RTL -26.995 dB | lý thuyết -26.995 dB
+  -> data_test/fir_test/rtl_plots/test_05_impulse/time_domain.png (+ .svg)
+  -> data_test/fir_test/rtl_plots/test_05_impulse/frequency_domain.png (+ .svg)
+  -> data_test/fir_test/rtl_plots/test_05_impulse/error.png (+ .svg)
+
+[test_06_step] Đáp ứng bước (x[n>=100] = 1000)
+  Mẫu kiểm tra     : 1000
+  Khớp / không khớp: 1000 / 0
+  max |error|      : 0
+  Bit-exact        : PASS
+  Độ lợi DC (bước) : đo RTL 1.0500 (+0.424 dB) | lý thuyết 1.0500 | đầu ra xác lập hằng
+  -> data_test/fir_test/rtl_plots/test_06_step/time_domain.png (+ .svg)
+  -> data_test/fir_test/rtl_plots/test_06_step/frequency_domain.png (+ .svg)
+  -> data_test/fir_test/rtl_plots/test_06_step/error.png (+ .svg)
+
+-> data_test/fir_test/rtl_plots/fir_rtl_comparison.png (+ .svg, tổng hợp mixed + noise)
+
+==============================================================================
+HIỆU QUẢ LỌC (đo từ actual RTL; lý thuyết từ c[] của fir.cpp)
+==============================================================================
+  test             f (Hz)      A_in     A_out   đo RTL (dB)  lý thuyết (dB)  lệch (dB)
+  test_01_low         500   1000.02   987.230        -0.112          -0.112     +0.000
+  test_02_high       4000    399.62    17.862       -26.995         -26.995     +0.000
+  test_03_mixed       500    999.90   987.115        -0.112          -0.112     +0.000
+  test_03_mixed      4000    399.82    17.870       -26.995         -26.995     +0.000
+  test_04_noise       500    997.31   984.424        -0.113          -0.112     -0.001
+  test_04_noise      4000    396.79    17.637       -27.043         -26.995     -0.048
+  test_03_mixed: 4000 Hz bị suy giảm thêm 26.88 dB so với 500 Hz (đo RTL)
+  test_04_noise: 4000 Hz bị suy giảm thêm 26.93 dB so với 500 Hz (đo RTL)
+  Ghi chú: test_04_noise có nhiễu Gauss băng rộng; sai số chuẩn (1σ) của phép đo tại 4000 Hz
+  lớn hơn do thành phần ra chỉ còn ~18 đơn vị. Chưa có ngưỡng đặc tả chính thức cho dải
+  thông/dải chắn nên báo cáo này chỉ nêu mức suy giảm đo được, không kết luận PASS đặc tả.
+
+==============================================================================
+TỔNG KẾT BIT-EXACT
+==============================================================================
+  [PASS] test_01_low: 1000/1000 mẫu khớp, max |error| = 0
+  [PASS] test_02_high: 1000/1000 mẫu khớp, max |error| = 0
+  [PASS] test_03_mixed: 1000/1000 mẫu khớp, max |error| = 0
+  [PASS] test_04_noise: 1000/1000 mẫu khớp, max |error| = 0
+  [PASS] test_05_impulse: 1000/1000 mẫu khớp, max |error| = 0
+  [PASS] test_06_step: 1000/1000 mẫu khớp, max |error| = 0
+  Tổng: 6/6 test bit-exact, 6000/6000 mẫu khớp, 0 không khớp/thiếu
+  Kết quả bước phân tích: PASS
+  Đồ thị: 19 hình (mỗi hình .png + .svg) trong data_test/fir_test/rtl_plots/

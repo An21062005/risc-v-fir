@@ -100,13 +100,39 @@ python scripts/run_rtl_tests.py --vivado-root D:/vivado/2026.1/Vivado
 python scripts/run_rtl_tests.py --vivado-root D:/vivado/2026.1/Vivado --tests tb_ext_ram_axi_b tb_ext_ram_axi_c --seed 7 --output sim_rtl_seed7
 ```
 
-Set `--output` to place generated artifacts elsewhere. Default `sim_rtl_tests`
-is ignored by the existing `.gitignore`. CPU `.mem` fixtures and FIR `.dat`
+Set `--output` to place generated artifacts elsewhere. Default `outfeed/`
+(project root): `outfeed/<testbench>/` build/log directories are ignored by
+`.gitignore`; `outfeed/<test>/actual.dat` holds the FIR RTL results of
+`tb_fir11_vectors`. CPU `.mem` fixtures and FIR `.dat`
 copies are generated only inside the simulation output directory.
 
 To compare the current regression against a saved baseline, pass
 `--rtl-root <directory-containing-the-old-rtl-filelists>` and a separate output
 directory. Tests continue to come from the current project.
+
+## Firmware tests (steps 1–4), run from a clean tree — 2026-10-18
+
+Run after deleting `firmware/build/` and `outfeed/tb_*/`; every image was rebuilt by
+`scripts/build_firmware.py` (GCC 13.4, rv32i/ilp32, ISA whitelist, IMEM/DMEM 1 KB checks).
+No RTL change. All 15 configurations: `TEST PASSED`, 0 errors (XSim 2026.1, ~66 s total).
+
+| Test | Firmware (IMEM bytes) | Checks | Cycles to HALT |
+|---|---|---|---|
+| `tb_cpu_firmware` | `main.c` (952) | 28 | 1672 |
+| `tb_cpu_fir_firmware` | `fir_smoke.c` (568) | 54 | 1509 |
+| `tb_cpu_fir_stream` | `fir_stream.c` (768) | 71 | 6365 |
+| `tb_cpu_ext_ram_b` / `_c` | `ext_ram_test.c` (732) | 47 / 47 | 8524 / 13072 |
+| `tb_cpu_fir_1000` / `_c` | `fir_1000.c` (860) | 82 / 82 | 218389 / 230955 |
+
+Default regression in the same run: `tb_fir11_wrapper` 477, `tb_fir11_vectors` 90985
+(6000/6000 samples), `tb_axi_fir` 36, `tb_ext_ram_cfgA` 9, `tb_ext_ram_axi_b`/`_c` 8343 each,
+`tb_cpu_bus_b` 104, `tb_cpu_bus_c` 162 checks, 0 errors. Re-run:
+
+```text
+python scripts/run_rtl_tests.py --vivado-root D:/vivado/2026.1/Vivado --tests \
+    tb_cpu_firmware tb_cpu_fir_firmware tb_cpu_fir_stream \
+    tb_cpu_ext_ram_b tb_cpu_ext_ram_c tb_cpu_fir_1000 tb_cpu_fir_1000_c
+```
 
 ## Verification limits
 

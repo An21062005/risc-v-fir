@@ -1,0 +1,44 @@
+<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>FIR11 RTL - tổng quan</title><style>
+:root { --surface:#fcfcfb; --page:#f9f9f7; --ink:#0b0b0b; --ink2:#52514e; --muted:#898781;
+        --grid:#e1e0d9; --good:#0ca30c; --crit:#d03b3b; }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--page); color:var(--ink);
+       font:15px/1.5 "Segoe UI", system-ui, sans-serif; }
+header { position:sticky; top:0; background:var(--surface); border-bottom:1px solid var(--grid);
+         padding:10px 24px; display:flex; flex-wrap:wrap; gap:6px 14px; align-items:center; z-index:1; }
+header b { margin-right:8px; }
+nav a { color:var(--ink2); text-decoration:none; padding:3px 9px; border-radius:6px; }
+nav a:hover { background:var(--grid); }
+nav a.cur { background:var(--ink); color:var(--surface); }
+main { max-width:1500px; margin:0 auto; padding:20px 24px 60px; }
+h1 { font-size:22px; margin:6px 0 4px; }
+h2 { font-size:17px; margin:28px 0 8px; }
+.sub { color:var(--ink2); margin:0 0 14px; }
+.badge { display:inline-block; padding:1px 9px; border-radius:6px; border:1.5px solid; font-weight:600;
+         font-size:13px; color:var(--ink); background:var(--surface); }
+.badge.pass { border-color:var(--good); } .badge.fail { border-color:var(--crit); }
+table { border-collapse:collapse; background:var(--surface); border:1px solid var(--grid); }
+th, td { padding:7px 12px; border-bottom:1px solid var(--grid); text-align:left; }
+th { color:var(--ink2); font-weight:600; font-size:13px; }
+td.num { text-align:right; font-variant-numeric:tabular-nums; }
+figure { margin:0 0 22px; background:var(--surface); border:1px solid var(--grid); border-radius:8px;
+         padding:10px; }
+figure img { width:100%; height:auto; display:block; }
+figcaption { color:var(--ink2); font-size:13px; margin-top:6px; }
+pre { background:var(--surface); border:1px solid var(--grid); border-radius:8px; padding:12px 14px;
+      overflow-x:auto; font:13px/1.45 Consolas, "Cascadia Mono", monospace; }
+a { color:#2a78d6; }
+</style></head><body><header><b>FIR11 RTL vs Python</b><nav><a href="index.html" class="cur">Tổng quan</a><a href="test_01_low/index.html" class="">test_01_low</a><a href="test_02_high/index.html" class="">test_02_high</a><a href="test_03_mixed/index.html" class="">test_03_mixed</a><a href="test_04_noise/index.html" class="">test_04_noise</a><a href="test_05_impulse/index.html" class="">test_05_impulse</a><a href="test_06_step/index.html" class="">test_06_step</a></nav></header><main><h1>Kết quả FIR11 RTL so với mô hình Python</h1><p class="sub">Tổng: 6/6 test bit-exact, 6000/6000 mẫu khớp, 0 không khớp/thiếu. Nguồn: outfeed/&lt;test&gt;/actual.dat (RTL) và data_test/fir_test/output/ (Python).</p><table><tr><th>Test</th><th>Bit-exact</th><th>Chi tiết</th><th>Gain 500 Hz (dB)<br>đo RTL / lý thuyết</th><th>Gain 4000 Hz (dB)<br>đo RTL / lý thuyết</th></tr><tr><td><a href="test_01_low/index.html">test_01_low</a></td><td><span class="badge pass">✓ BIT-EXACT PASS</span></td><td>1000/1000 mẫu khớp, max |error| = 0</td><td class="num">-0.112 <span style="color:var(--muted)">/ -0.112</span></td><td class="num"><span style="color:var(--muted)">—</span></td></tr><tr><td><a href="test_02_high/index.html">test_02_high</a></td><td><span class="badge pass">✓ BIT-EXACT PASS</span></td><td>1000/1000 mẫu khớp, max |error| = 0</td><td class="num"><span style="color:var(--muted)">—</span></td><td class="num">-26.995 <span style="color:var(--muted)">/ -26.995</span></td></tr><tr><td><a href="test_03_mixed/index.html">test_03_mixed</a></td><td><span class="badge pass">✓ BIT-EXACT PASS</span></td><td>1000/1000 mẫu khớp, max |error| = 0</td><td class="num">-0.112 <span style="color:var(--muted)">/ -0.112</span></td><td class="num">-26.995 <span style="color:var(--muted)">/ -26.995</span></td></tr><tr><td><a href="test_04_noise/index.html">test_04_noise</a></td><td><span class="badge pass">✓ BIT-EXACT PASS</span></td><td>1000/1000 mẫu khớp, max |error| = 0</td><td class="num">-0.113 <span style="color:var(--muted)">/ -0.112</span></td><td class="num">-27.043 <span style="color:var(--muted)">/ -26.995</span></td></tr><tr><td><a href="test_05_impulse/index.html">test_05_impulse</a></td><td><span class="badge pass">✓ BIT-EXACT PASS</span></td><td>1000/1000 mẫu khớp, max |error| = 0</td><td class="num"><span style="color:var(--muted)">—</span></td><td class="num"><span style="color:var(--muted)">—</span></td></tr><tr><td><a href="test_06_step/index.html">test_06_step</a></td><td><span class="badge pass">✓ BIT-EXACT PASS</span></td><td>1000/1000 mẫu khớp, max |error| = 0</td><td class="num"><span style="color:var(--muted)">—</span></td><td class="num"><span style="color:var(--muted)">—</span></td></tr></table><h2>Tổng hợp mixed + noise</h2><figure><img src="fir_rtl_comparison.svg" alt="So sánh mixed và noise"><figcaption>fir_rtl_comparison.svg</figcaption></figure><h2>Hiệu quả lọc</h2><pre>(đo từ actual RTL; lý thuyết từ c[] của fir.cpp)
+==============================================================================
+  test             f (Hz)      A_in     A_out   đo RTL (dB)  lý thuyết (dB)  lệch (dB)
+  test_01_low         500   1000.02   987.230        -0.112          -0.112     +0.000
+  test_02_high       4000    399.62    17.862       -26.995         -26.995     +0.000
+  test_03_mixed       500    999.90   987.115        -0.112          -0.112     +0.000
+  test_03_mixed      4000    399.82    17.870       -26.995         -26.995     +0.000
+  test_04_noise       500    997.31   984.424        -0.113          -0.112     -0.001
+  test_04_noise      4000    396.79    17.637       -27.043         -26.995     -0.048
+  test_03_mixed: 4000 Hz bị suy giảm thêm 26.88 dB so với 500 Hz (đo RTL)
+  test_04_noise: 4000 Hz bị suy giảm thêm 26.93 dB so với 500 Hz (đo RTL)
+  Ghi chú: test_04_noise có nhiễu Gauss băng rộng; sai số chuẩn (1σ) của phép đo tại 4000 Hz
+  lớn hơn do thành phần ra chỉ còn ~18 đơn vị. Chưa có ngưỡng đặc tả chính thức cho dải
+  thông/dải chắn nên báo cáo này chỉ nêu mức suy giảm đo được, không kết luận PASS đặc tả.</pre><h2>Báo cáo đầy đủ</h2><p><a href="summary.txt">summary.txt</a></p></main></body></html>

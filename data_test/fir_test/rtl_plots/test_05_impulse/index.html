@@ -1,0 +1,37 @@
+<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>FIR11 RTL - test_05_impulse</title><style>
+:root { --surface:#fcfcfb; --page:#f9f9f7; --ink:#0b0b0b; --ink2:#52514e; --muted:#898781;
+        --grid:#e1e0d9; --good:#0ca30c; --crit:#d03b3b; }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--page); color:var(--ink);
+       font:15px/1.5 "Segoe UI", system-ui, sans-serif; }
+header { position:sticky; top:0; background:var(--surface); border-bottom:1px solid var(--grid);
+         padding:10px 24px; display:flex; flex-wrap:wrap; gap:6px 14px; align-items:center; z-index:1; }
+header b { margin-right:8px; }
+nav a { color:var(--ink2); text-decoration:none; padding:3px 9px; border-radius:6px; }
+nav a:hover { background:var(--grid); }
+nav a.cur { background:var(--ink); color:var(--surface); }
+main { max-width:1500px; margin:0 auto; padding:20px 24px 60px; }
+h1 { font-size:22px; margin:6px 0 4px; }
+h2 { font-size:17px; margin:28px 0 8px; }
+.sub { color:var(--ink2); margin:0 0 14px; }
+.badge { display:inline-block; padding:1px 9px; border-radius:6px; border:1.5px solid; font-weight:600;
+         font-size:13px; color:var(--ink); background:var(--surface); }
+.badge.pass { border-color:var(--good); } .badge.fail { border-color:var(--crit); }
+table { border-collapse:collapse; background:var(--surface); border:1px solid var(--grid); }
+th, td { padding:7px 12px; border-bottom:1px solid var(--grid); text-align:left; }
+th { color:var(--ink2); font-weight:600; font-size:13px; }
+td.num { text-align:right; font-variant-numeric:tabular-nums; }
+figure { margin:0 0 22px; background:var(--surface); border:1px solid var(--grid); border-radius:8px;
+         padding:10px; }
+figure img { width:100%; height:auto; display:block; }
+figcaption { color:var(--ink2); font-size:13px; margin-top:6px; }
+pre { background:var(--surface); border:1px solid var(--grid); border-radius:8px; padding:12px 14px;
+      overflow-x:auto; font:13px/1.45 Consolas, "Cascadia Mono", monospace; }
+a { color:#2a78d6; }
+</style></head><body><header><b>FIR11 RTL vs Python</b><nav><a href="../index.html" class="">Tổng quan</a><a href="../test_01_low/index.html" class="">test_01_low</a><a href="../test_02_high/index.html" class="">test_02_high</a><a href="../test_03_mixed/index.html" class="">test_03_mixed</a><a href="../test_04_noise/index.html" class="">test_04_noise</a><a href="../test_05_impulse/index.html" class="cur">test_05_impulse</a><a href="../test_06_step/index.html" class="">test_06_step</a></nav></header><main><h1>test_05_impulse <span class="badge pass">✓ BIT-EXACT PASS</span></h1><pre>[test_05_impulse] Đáp ứng xung (x[0] = 1000)
+  Mẫu kiểm tra     : 1000
+  Khớp / không khớp: 1000 / 0
+  max |error|      : 0
+  Bit-exact        : PASS
+  |H(500 Hz)| từ xung: đo RTL -0.112 dB | lý thuyết -0.112 dB
+  |H(4000 Hz)| từ xung: đo RTL -26.995 dB | lý thuyết -26.995 dB</pre><h2>Miền thời gian</h2><figure><img src="time_domain.svg" alt="Miền thời gian - test_05_impulse"><figcaption>rtl_plots/test_05_impulse/time_domain.svg</figcaption></figure><h2>Miền tần số (FFT)</h2><figure><img src="frequency_domain.svg" alt="Miền tần số (FFT) - test_05_impulse"><figcaption>rtl_plots/test_05_impulse/frequency_domain.svg</figcaption></figure><h2>Sai số RTL: actual − expected</h2><figure><img src="error.svg" alt="Sai số RTL: actual − expected - test_05_impulse"><figcaption>rtl_plots/test_05_impulse/error.svg</figcaption></figure><p><a href="../test_04_noise/index.html">← test_04_noise</a>  <a href="../test_06_step/index.html">test_06_step →</a></p></main></body></html>

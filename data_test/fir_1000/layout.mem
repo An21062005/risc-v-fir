@@ -1,0 +1,6 @@
+40010000 // IN_ADDR
+40011000 // OUT_ADDR
+000003e8 // N
+fff0ae4c // EXP_SUM
+0015ed26 // EXP_XOR
+ffffef10 // IN_SUM
