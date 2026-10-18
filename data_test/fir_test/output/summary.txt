@@ -1,0 +1,118 @@
+========================================================================
+FIR TEST VECTOR GENERATOR
+========================================================================
+Hệ số       : đọc từ hls/FIR11/FIR11/fir.cpp (mảng c[])
+coeff_int   : [54, 0, -92, 0, 313, 500, 313, 0, -92, 0, 54]
+sum(coeff)  : 1050  (DC gain = 1.0500)
+Đối xứng    : có (thứ tự hệ số không ảnh hưởng)
+Đối chiếu   : khớp bộ hệ số HLS kỳ vọng [54, 0, -92, 0, 313, 500, 313, 0, -92, 0, 54]
+Kiểu dữ liệu: x int32, coeff int32, acc int32, y int32, overflow=wrap (theo fir.h), y KHÔNG chia SCALE
+Mô hình     : y[n] = sum_k c[k]*x[n-k], k=0..10; lịch sử 10 mẫu = 0 đầu mỗi test
+Tín hiệu    : FS=10000 Hz, F_PASS=2000 Hz, F_STOP=3000 Hz, SCALE=1000, NUM_SAMPLES=1000
+Độ lợi lý thuyết |H(f)| = |sum c[k] e^-jwk| / SCALE (hệ số HLS):
+      0 Hz (DC)              : +0.424 dB  (x1.0500)
+    500 Hz (test, dải thông): -0.112 dB  (x0.9872)
+   2000 Hz (biên dải thông): -0.443 dB  (x0.9503)
+   3000 Hz (biên dải chắn) : -26.074 dB  (x0.0497)
+   4000 Hz (test, dải chắn): -26.995 dB  (x0.0447)
+  -> data_test/fir_test/output/coeff.dat
+  -> data_test/fir_test/output/coeff_c.txt
+  -> data_test/fir_test/output/fir_frequency_response.png
+
+[test_01_low] Low Frequency Only
+  Số mẫu      : input=1000, expected=1000; input.dat không đổi so với file cũ
+  Phạm vi     : x=[-1000, 1000], y=[-987134, 987134] (headroom int32: 2175x)
+  Gain   500 Hz: đo=-0.112 dB, lý thuyết=-0.112 dB, lệch=+0.000 dB
+  -> data_test/fir_test/output/test_01_low/input.dat
+  -> data_test/fir_test/output/test_01_low/expected.dat
+  -> data_test/fir_test/output/test_01_low/time_domain.png
+  -> data_test/fir_test/output/test_01_low/frequency_domain.png
+
+[test_02_high] High Frequency Only
+  Số mẫu      : input=1000, expected=1000; input.dat không đổi so với file cũ
+  Phạm vi     : x=[-380, 380], y=[-20520, 38595] (headroom int32: 55641x)
+  Gain  4000 Hz: đo=-26.995 dB, lý thuyết=-26.995 dB, lệch=-0.000 dB
+  -> data_test/fir_test/output/test_02_high/input.dat
+  -> data_test/fir_test/output/test_02_high/expected.dat
+  -> data_test/fir_test/output/test_02_high/time_domain.png
+  -> data_test/fir_test/output/test_02_high/frequency_domain.png
+
+[test_03_mixed] Mixed Frequencies
+  Số mẫu      : input=1000, expected=1000; input.dat không đổi so với file cũ
+  Phạm vi     : x=[-1189, 1189], y=[-987226, 987226] (headroom int32: 2175x)
+  Gain   500 Hz: đo=-0.112 dB, lý thuyết=-0.112 dB, lệch=+0.000 dB
+  Gain  4000 Hz: đo=-26.995 dB, lý thuyết=-26.995 dB, lệch=+0.000 dB
+  -> data_test/fir_test/output/test_03_mixed/input.dat
+  -> data_test/fir_test/output/test_03_mixed/expected.dat
+  -> data_test/fir_test/output/test_03_mixed/time_domain.png
+  -> data_test/fir_test/output/test_03_mixed/frequency_domain.png
+
+[test_04_noise] Mixed + Gaussian Noise
+  Số mẫu      : input=1000, expected=1000; input.dat không đổi so với file cũ
+  Phạm vi     : x=[-1490, 1663], y=[-1234199, 1253108] (headroom int32: 1714x)
+  Gain   500 Hz: đo=-0.113 dB, lý thuyết=-0.112 dB, lệch=-0.001 dB
+  Gain  4000 Hz: đo=-27.043 dB, lý thuyết=-26.995 dB, lệch=-0.048 dB
+    (không so với lý thuyết: thành phần 4000 Hz sau lọc ~18 đơn vị (sau /SCALE), chìm trong nhiễu đã lọc -> sai số đo lớn)
+  -> data_test/fir_test/output/test_04_noise/input.dat
+  -> data_test/fir_test/output/test_04_noise/expected.dat
+  -> data_test/fir_test/output/test_04_noise/time_domain.png
+  -> data_test/fir_test/output/test_04_noise/frequency_domain.png
+
+[test_05_impulse] Impulse Response
+  Số mẫu      : input=1000, expected=1000; input.dat không đổi so với file cũ
+  Phạm vi     : x=[0, 1000], y=[-92000, 500000] (headroom int32: 4295x)
+  y[0:11] = coeff_int x 1000: khớp
+  -> data_test/fir_test/output/test_05_impulse/input.dat
+  -> data_test/fir_test/output/test_05_impulse/expected.dat
+  -> data_test/fir_test/output/test_05_impulse/time_domain.png
+  -> data_test/fir_test/output/test_05_impulse/frequency_domain.png
+
+[test_06_step] Step Response
+  Số mẫu      : input=1000, expected=1000; input.dat không đổi so với file cũ
+  Phạm vi     : x=[0, 1000], y=[-38000, 1088000] (headroom int32: 1974x)
+  Giá trị xác lập y[-1] = 1050000 (sum(coeff) x 1000 = 1050000)
+  -> data_test/fir_test/output/test_06_step/input.dat
+  -> data_test/fir_test/output/test_06_step/expected.dat
+  -> data_test/fir_test/output/test_06_step/time_domain.png
+  -> data_test/fir_test/output/test_06_step/frequency_domain.png
+
+========================================================================
+KIỂM TRA ĐỘC LẬP expected.dat (Python thuần, vòng lặp fir.cpp, wrap 32-bit từng bước)
+========================================================================
+  test_01_low: 1000/1000 mẫu khớp
+  test_02_high: 1000/1000 mẫu khớp
+  test_03_mixed: 1000/1000 mẫu khớp
+  test_04_noise: 1000/1000 mẫu khớp
+  test_05_impulse: 1000/1000 mẫu khớp
+  test_06_step: 1000/1000 mẫu khớp
+  Tổng: 6000/6000 mẫu khớp, 0 lệch
+
+========================================================================
+ĐÁNH GIÁ MÔ HÌNH THAM CHIẾU THEO TIÊU CHÍ ĐÃ CẤU HÌNH
+(Đây là đặc tính của bộ hệ số/expected.dat, CHƯA phải kết quả mô phỏng RTL)
+========================================================================
+  [PASS] test_01_low: input.dat không đổi so với bản trước
+  [PASS] test_01_low: |đo - lý thuyết| tại 500 Hz <= 0.2 dB
+  [PASS] test_01_low: gain@500Hz -0.11 dB >= -1.0 dB
+  [PASS] test_02_high: input.dat không đổi so với bản trước
+  [PASS] test_02_high: |đo - lý thuyết| tại 4000 Hz <= 0.2 dB
+  [PASS] test_02_high: gain@4000Hz -26.99 dB <= -20.0 dB
+  [PASS] test_03_mixed: input.dat không đổi so với bản trước
+  [PASS] test_03_mixed: |đo - lý thuyết| tại 500 Hz <= 0.2 dB
+  [PASS] test_03_mixed: |đo - lý thuyết| tại 4000 Hz <= 0.2 dB
+  [PASS] test_03_mixed: gain@500Hz -0.11 dB >= -1.0 dB
+  [PASS] test_03_mixed: gain@4000Hz -26.99 dB <= -20.0 dB
+  [PASS] test_04_noise: input.dat không đổi so với bản trước
+  [PASS] test_04_noise: |đo - lý thuyết| tại 500 Hz <= 0.2 dB
+  [PASS] test_04_noise: gain@500Hz -0.11 dB >= -1.0 dB
+  [PASS] test_05_impulse: input.dat không đổi so với bản trước
+  [PASS] test_05_impulse: đáp ứng xung = coeff_int x 1000
+  [PASS] test_06_step: input.dat không đổi so với bản trước
+  [PASS] test_06_step: giá trị xác lập = sum(coeff) x 1000
+  [PASS] test_01_low: expected.dat khớp mô hình Python thuần (1000 mẫu)
+  [PASS] test_02_high: expected.dat khớp mô hình Python thuần (1000 mẫu)
+  [PASS] test_03_mixed: expected.dat khớp mô hình Python thuần (1000 mẫu)
+  [PASS] test_04_noise: expected.dat khớp mô hình Python thuần (1000 mẫu)
+  [PASS] test_05_impulse: expected.dat khớp mô hình Python thuần (1000 mẫu)
+  [PASS] test_06_step: expected.dat khớp mô hình Python thuần (1000 mẫu)
+Tổng: 24/24 tiêu chí đạt

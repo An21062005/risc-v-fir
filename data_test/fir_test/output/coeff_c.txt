@@ -1,0 +1,9 @@
+// FIR low-pass coefficients (HLS IP) - exported by generate_fir_data.py
+// Source : đọc từ hls/FIR11/FIR11/fir.cpp (mảng c[])
+// FS=10000 Hz, F_PASS=2000 Hz, F_STOP=3000 Hz, SCALE=1000
+// Convention: y[n] = sum_k c[k] * x[n-k]  (c[0] multiplies newest sample)
+// Types: data_t = coef_t = acc_t = int (signed 32-bit), wrap on overflow
+// Output is NOT divided by SCALE (DC gain = sum(c) = 1050)
+#define NUM_TAPS 11
+#define FIR_SCALE 1000
+const coef_t c[NUM_TAPS] = {54, 0, -92, 0, 313, 500, 313, 0, -92, 0, 54};

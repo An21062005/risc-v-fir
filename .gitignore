@@ -1,0 +1,47 @@
+# Dạng sóng và thư mục mô phỏng
+*.vcd
+*.wdb
+*.wlf
+xsim.dir/
+sim.out
+sim_*
+!sim_*.v
+sim_out/
+work/
+transcript
+modelsim.ini
+
+# Vivado / Vitis
+*.jou
+*.log
+*.str
+.Xil/
+*.comp/
+webtalk*
+
+# Workspace Vitis HLS: chỉ giữ mã nguồn, syn/verilog và syn/report
+.autopilot/
+.cache/
+.wsdata/
+.theia/
+.debug/
+.lock
+logs/
+impl/
+*.o
+*.bc
+*.ll
+*.d
+
+# Python
+__pycache__/
+*.pyc
+
+# Workspace Vitis HLS chứa đường dẫn tuyệt đối trên máy cá nhân: chỉ giữ syn/verilog + syn/report
+hls/**/*_prj/*
+!hls/**/*_prj/fir/
+hls/**/*_prj/fir/*
+!hls/**/*_prj/fir/hls/
+hls/**/*_prj/fir/hls/*
+!hls/**/*_prj/fir/hls/syn/
+hls/**/*_prj/fir/hls/syn/vhdl/
