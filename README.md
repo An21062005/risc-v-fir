@@ -1,380 +1,516 @@
 # riscv-soc-fir-hls
 
-SoC RISC-V có bộ lọc FIR 11 tap sinh bằng Vitis HLS, gắn vào bus qua `fir11_wrapper`.
-README này hướng dẫn chạy test RTL, compile thủ công, mở waveform, tạo dữ liệu tham chiếu
-và xem đồ thị so sánh FIR RTL với mô hình Python.
+SoC RISC-V 32-bit (RV32I, pipeline 5 tầng) có bộ lọc **FIR 11 tap sinh bằng Vitis HLS**, nối qua
+bus AXI4-Lite cùng Timer, bộ điều khiển ngắt và RAM dữ liệu ngoài (tùy chọn). Toàn bộ thiết kế
+được kiểm chứng bằng mô phỏng XSim tự kiểm tra (self-checking) và đã tổng hợp bằng Vivado.
 
-Mọi lệnh bên dưới chạy trong **Git Bash** tại thư mục gốc của project. Tất cả các script
-tự xác định project root từ vị trí của chúng, nên không bắt buộc phải `cd` vào đâu cả.
+| Hạng mục | Trạng thái hiện tại |
+|---|---|
+| Mô phỏng XSim | **56/56 cấu hình đạt yêu cầu**: 52 PASS + 4 negative test bị từ chối đúng dự kiến |
+| FIR HLS so với mô hình Python | bit-exact 6/6 bộ vector (6 000 mẫu), 1 000 mẫu × 6 dataset × 2 cấu hình RAM |
+| Vivado synthesis (cấu hình A) | **PASS**: 0 latch, 0 critical warning, nạp đủ 4 file khởi tạo bộ nhớ |
+| Timing 100 MHz (sau place & route) | **FAIL**: WNS −3,247 ns, Fmax ≈ 75 MHz (75 MHz và 50 MHz đạt) |
+| Chạy trên FPGA | **Chưa**: chưa gán chân board, chưa tạo bitstream, chưa chạy phần cứng |
 
-## Cấu trúc thư mục
+## Mục lục
+
+1. [Tổng quan](#1-tổng-quan)
+2. [Kiến trúc](#2-kiến-trúc)
+3. [Cấu trúc thư mục](#3-cấu-trúc-thư-mục)
+4. [Cấu hình SoC và bản đồ địa chỉ](#4-cấu-hình-soc-và-bản-đồ-địa-chỉ)
+5. [Yêu cầu công cụ](#5-yêu-cầu-công-cụ)
+6. [Firmware](#6-firmware)
+7. [Mô phỏng và regression](#7-mô-phỏng-và-regression)
+8. [Danh sách testbench](#8-danh-sách-testbench)
+9. [FIR HLS IP và dữ liệu kiểm chứng](#9-fir-hls-ip-và-dữ-liệu-kiểm-chứng)
+10. [RAM ngoài: cache và SDRAM mô phỏng](#10-ram-ngoài-cache-và-sdram-mô-phỏng)
+11. [Kết quả kiểm chứng](#11-kết-quả-kiểm-chứng)
+12. [Synthesis và timing](#12-synthesis-và-timing)
+13. [Giới hạn và việc cần làm trước khi chạy FPGA](#13-giới-hạn-và-việc-cần-làm-trước-khi-chạy-fpga)
+14. [Tài liệu kiểm chứng chi tiết](#14-tài-liệu-kiểm-chứng-chi-tiết)
+15. [Lưu ý khi sử dụng](#15-lưu-ý-khi-sử-dụng)
+
+## 1. Tổng quan
+
+- **CPU** `rvcore32_pipeline_soc` ([rtl/cpu_soc.v](rtl/cpu_soc.v)): RV32I tập con, 5 tầng
+  IF/ID/EX/MEM/WB, forwarding, phát hiện load-use, giải quyết nhánh ở EX. IMEM 1 KB và DMEM 1 KB
+  nội bộ. Ngắt tối thiểu không có CSR: một mức ngắt, vector cố định `0x10`, `mepc`/`in_irq` nội bộ,
+  trở về bằng `mret`.
+- **Bus**: CPU → `cpu_axi_master` (AXI4-Lite, một giao dịch tại một thời điểm) → `axi_interconnect`
+  → Timer, bộ ngắt, FIR, và RAM ngoài (tùy chọn).
+- **FIR11**: IP do Vitis HLS 2024.1 sinh từ [hls/FIR11/FIR11/fir.cpp](hls/FIR11/FIR11/fir.cpp),
+  hệ số `{54, 0, -92, 0, 313, 500, 313, 0, -92, 0, 54}`, bọc bởi
+  [fir11_wrapper.v](rtl/Peripherals/fir11_wrapper.v) thành khối thanh ghi có ngắt DONE.
+- **Ứng dụng mẫu**: Timer IRQ 10 kHz điều phối từng mẫu vào FIR, FIR IRQ trả kết quả;
+  1 000 mẫu lưu ở RAM ngoài, so bit-exact với mô hình Python.
+
+**Nguồn gốc và giấy phép.** CPU (`rtl/CPU/`, `cpu_soc.v`), AXI master/interconnect, Timer, bộ ngắt,
+cache, SDRAM và các package dựa trên **tiny-riscv-soc** (MIT, © 2026 Leela Shanmukh Yagneek
+Patnala, file `LICENCE` của repo đó). Mỗi file được sao chép ghi rõ nguồn và các thay đổi ở phần
+chú thích đầu file. FIR11 là RTL do Vitis HLS sinh từ `fir.cpp` của project này. Wrapper FIR,
+reset synchronizer, testbench, firmware và script là phần viết riêng cho project.
+
+## 2. Kiến trúc
+
+```text
+                   rst_n ──► reset_sync (2 FF: bật bất đồng bộ, nhả đồng bộ)
+                                    │
+ ┌──────────────────────────────────┴───────────────────────────────────────────────┐
+ │ soc_top                                                                          │
+ │  ┌────────────────────────────┐  bus_rd/wr, addr, data, ready                    │
+ │  │ CPU rvcore32_pipeline_soc  │──────────────────────┐                           │
+ │  │ IF ID EX MEM WB            │◄── irq ──────────┐   ▼                           │
+ │  │ IMEM 1 KB  DMEM 1 KB       │                  │  cpu_axi_master (AXI4-Lite)   │
+ │  │ (program.mem, data.mem)    │                  │   │ BRESP/RRESP, BUSERR       │
+ │  └────────────────────────────┘                  │   ▼                           │
+ │                                                  │  axi_interconnect             │
+ │                                                  │   ├─► timer           0x080   │
+ │                                                  │   ├─► interrupt_axi_wrapper   │
+ │                     irq_in = {fir_irq, timer_irq}│   │   + interrupt_controller  │
+ │                                                  └───┤                 0x1C0     │
+ │                                                      ├─► fir11_wrapper  0x200     │
+ │                                                      │     └─ fir (Vitis HLS)    │
+ │                                                      │        ROM hệ số + RAM    │
+ │                                                      │        shift_reg (.dat)   │
+ │                                                      └─► RAM ngoài 0x0001_0000   │
+ │                                                          (chỉ cấu hình B/C)      │
+ │                                                          cache_top               │
+ │                                                           ├ cache_controller (C) │
+ │                                                           └ cache_dma_arbiter    │
+ │                                                              └ sdram_top         │
+ │                                                                 (controller +    │
+ │                                                                  sdram_model)    │
+ └──────────────────────────────────────────────────────────────────────────────────┘
+   cổng ra: cpu_irq (yêu cầu ngắt tới CPU), bus_error (đã chốt lỗi bus)
+```
+
+- CPU đưa mọi địa chỉ có `addr[31:30] == 01` ra bus với `bus_addr = {2'b00, addr[29:0]}`, nên
+  CPU thấy ngoại vi ở `0x4000_0000 + offset bus`. Các địa chỉ khác đi vào DMEM nội bộ.
+- Khi CPU chờ bus, `bus_stall` giữ PC và cả 4 thanh ghi pipeline. Ngắt chỉ được nhận khi không
+  stall và lệnh ở ID không phải nhánh/nhảy/`mret`.
+
+## 3. Cấu trúc thư mục
 
 ```text
 riscv-soc-fir-hls/
-├── hls/FIR11/FIR11/          # C HLS: fir.cpp (hệ số c[]), fir.h, report csynth
-├── rtl/                      # RTL SoC: CPU, AXI, peripheral, FIR11 HLS (bản sao)
-│   ├── Peripherals/fir11_wrapper.v
-│   ├── Peripherals/FIR11/    # RTL do Vitis HLS sinh + 2 file ROM/RAM .dat
-│   └── filelist_fir11.f      # danh sách nguồn SoC
-├── firmware/                 # firmware C cho CPU (build/ sinh ra, gitignore)
-│   ├── startup.S, linker.ld  # dùng chung cho mọi firmware
-│   ├── main.c                # Bước 1: smoke test CPU
-│   ├── fir_smoke.c           # Bước 2: 1 mẫu FIR qua AXI
-│   ├── fir_stream.c          # Bước 3: 32 mẫu DMEM -> FIR -> DMEM (+ fir_stream_data.h sinh tự động)
-│   ├── ext_ram_test.c        # Bước 4a: lw/sw RAM ngoài 64 KB
-│   └── fir_1000.c            # Bước 4: 1000 mẫu RAM ngoài -> FIR -> RAM ngoài (+ fir_1000_data.h)
-├── tb/                       # testbench Verilog self-checking (cpu_soc_monitor.vh: checker dùng chung)
-├── scripts/
-│   ├── run_rtl_tests.py      # compile + chạy test XSim, ghi waveform, mở GUI
-│   ├── build_firmware.py     # GCC build firmware + kiểm tra ISA/IMEM/DMEM -> program.mem, data.mem
-│   ├── gen_fir_stream_data.py   # sinh firmware/fir_stream_data.h (32 mẫu + expected)
-│   ├── gen_fir_1000_data.py  # sinh data_test/fir_1000/ + firmware/fir_1000_data.h
-│   ├── plot_fir_rtl_results.py  # phân tích + vẽ đồ thị RTL vs Python
-│   ├── view_fir_plots.py     # xem đồ thị từng test: trình duyệt hoặc cửa sổ Python
-│   ├── view_fir_plots.m      # xem đồ thị từng test bằng MATLAB
-│   └── prep_fir11_dat.sh     # chép 2 file .dat của HLS vào thư mục mô phỏng
-├── data_test/fir_test/
-│   ├── generate_fir_data.py  # tạo input/expected từ hệ số trong fir.cpp
-│   ├── output/<test>/        # input.dat, expected.dat (Python)
-│   └── rtl_plots/            # đồ thị + summary.txt so sánh RTL vs Python
-├── data_test/fir_1000/       # Bước 4: input/expected/layout.mem 1000 mẫu + manifest.txt (nguồn, SHA-256)
-├── outfeed/
-│   ├── <test>/actual.dat     # kết quả FIR RTL của tb_fir11_vectors
-│   └── tb_*/                 # build, log, waveform XSim của từng testbench (gitignore)
-└── docs/RTL_FIX_VERIFICATION.md
+├── rtl/
+│   ├── soc_top.v               top SoC (tham số ENABLE_EXT_RAM, EXT_RAM_USE_CACHE, EXT_RAM_TIMEOUT)
+│   ├── cpu_soc.v               CPU pipeline có cổng bus + ngắt
+│   ├── reset_sync.v            đồng bộ reset
+│   ├── CPU/                    cpu.v (submodule gốc), Pipeline_Registers.v
+│   ├── AXI/                    AXI_master.v, AXI_Interconnect.v (decoder, write/read FSM, arbiter RAM)
+│   ├── Peripherals/            timer.v, Interrupt_controller.v, interrupt_axi_wrapper.v,
+│   │   │                       fir11_wrapper.v
+│   │   └── FIR11/              8 file do Vitis HLS sinh (6 .v + 2 .dat), chép nguyên trạng
+│   ├── Memory/                 cache_controller.v (cache_top), sdram.v (sdram_top, sdram_model)
+│   ├── packages/               soc_pkg.vh, interrupt_pkg.vh, cache_pkg.vh, sdram_pkg.vh
+│   ├── filelist_fir11.f        danh sách nguồn cấu hình A
+│   └── filelist_ext_ram_sim.f  thêm cho cấu hình B/C
+├── tb/                         testbench self-checking; asm/irq_dir.S (ảnh lệnh cho tb_cpu_irq_c4)
+├── firmware/                   firmware C/ASM, startup*.S, linker*.ld (build/ sinh ra, gitignore)
+├── fpga/                       soc_top.xdc (clock 100 MHz), synth_soc.tcl (Vivado non-project)
+├── hls/FIR11/FIR11/            nguồn C HLS (fir.cpp, fir.h) + syn/verilog, syn/report
+├── scripts/                    run_rtl_tests.py, build_firmware.py, run_vivado_synth.py,
+│                               verify_phase41.py, gen_fir_*_data.py, plot/view_fir_plots.*,
+│                               prep_fir11_dat.sh
+├── data_test/
+│   ├── fir_test/               generate_fir_data.py, output/<test>/ (input.dat, expected.dat),
+│   │                           rtl_plots/ (đồ thị RTL vs Python)
+│   └── fir_1000/               input/expected/layout.mem 1 000 mẫu + manifest.txt
+├── outfeed/<test>/actual.dat   kết quả FIR RTL của tb_fir11_vectors (được git theo dõi)
+└── docs/                       3 báo cáo kiểm chứng (mục 14)
 ```
 
-Sáu test dữ liệu FIR, mỗi test 1000 mẫu, FS = 10 kHz:
+`outfeed/tb_*/`, `outfeed/synth_*/`, `firmware/build/` là thư mục sinh ra, đã gitignore.
 
-| Test | Tín hiệu |
-|---|---|
-| `test_01_low` | sin 500 Hz |
-| `test_02_high` | sin 4000 Hz |
-| `test_03_mixed` | 500 Hz + 4000 Hz |
-| `test_04_noise` | 500 Hz + 4000 Hz + nhiễu Gauss |
-| `test_05_impulse` | xung x[0] = 1000 |
-| `test_06_step` | bậc thang x[n ≥ 100] = 1000 |
+## 4. Cấu hình SoC và bản đồ địa chỉ
 
-## Yêu cầu
+### 4.1 Ba cấu hình
 
-- **Vivado 2026.1 (XSim)**, đường dẫn mặc định `D:/vivado/2026.1/Vivado`. Đây là simulator
-  dùng để chạy test.
-- **Questa 10.7c** (tùy chọn): chỉ dùng được `vlog -lint`; `vsim` không có license runtime.
-- **Python 3** với `numpy`, `scipy`, `matplotlib` (đã thử với Python 3.14, numpy 2.4,
-  scipy 1.17, matplotlib 3.11).
+| Cấu hình | Tham số `soc_top` | Danh sách file | Dùng cho |
+|---|---|---|---|
+| **A** (mặc định) | `ENABLE_EXT_RAM=0` | `rtl/filelist_fir11.f` | mô phỏng **và** FPGA; không có RAM ngoài |
+| **B** | `ENABLE_EXT_RAM=1 EXT_RAM_USE_CACHE=0` | + `rtl/filelist_ext_ram_sim.f` | chỉ mô phỏng: RAM ngoài, không cache |
+| **C** | `ENABLE_EXT_RAM=1 EXT_RAM_USE_CACHE=1` | + `rtl/filelist_ext_ram_sim.f` | chỉ mô phỏng: RAM ngoài có cache |
 
-Để khỏi gõ `--vivado-root` mỗi lần, có thể đặt biến môi trường:
+Vì sao B/C chỉ dùng cho mô phỏng: xem [mục 10](#10-ram-ngoài-cache-và-sdram-mô-phỏng).
+`EXT_RAM_TIMEOUT` (mặc định 1 024 chu kỳ) giới hạn thời gian chờ RAM ngoài.
+
+### 4.2 Bản đồ địa chỉ CPU
+
+| Vùng | Địa chỉ CPU | Địa chỉ bus | Ghi chú |
+|---|---|---|---|
+| IMEM 1 KB | `0x0000_0000`–`0x0000_03FF` | — | chỉ nạp lệnh; reset PC = 0, vector ngắt `0x10` |
+| DMEM 1 KB | `0x1000_0000`–`0x1000_03FF` | — | dữ liệu, stack; mọi địa chỉ `addr[31:30] != 01` đều vào DMEM (bí danh ngoài 1 KB) |
+| Timer | `0x4000_0080`–`0x4000_00BF` | `0x080`–`0x0BF` | |
+| Bộ ngắt | `0x4000_01C0`–`0x4000_01FF` | `0x1C0`–`0x1FF` | |
+| FIR11 | `0x4000_0200`–`0x4000_023F` | `0x200`–`0x23F` | |
+| RAM ngoài 64 KB | `0x4001_0000`–`0x4001_FFFF` | `0x0001_0000`–`0x0001_FFFF` | chỉ B/C; ở cấu hình A là vùng không map |
+
+### 4.3 Quy tắc truy cập bus (RTL hiện tại)
+
+| Trường hợp | BRESP / RRESP | Tác dụng |
+|---|---|---|
+| Word căn 4 byte, `WSTRB = 1111` | `OKAY` | một xung `wr_en`/`rd_en` mỗi giao dịch |
+| MMIO ghi `WSTRB = 0000` (căn lề) | `OKAY` | không làm gì |
+| Ghi từng phần, ghi/đọc lệch | `SLVERR` | không ghi, đọc trả 0, không tác dụng phụ |
+| **Địa chỉ không map** | **`DECERR`** | không ghi, đọc trả 0 |
+| RAM ngoài không trả lời trong `EXT_RAM_TIMEOUT` chu kỳ | `SLVERR` | đọc trả 0; completion đến muộn bị bỏ |
+
+`cpu_axi_master` kiểm BRESP/RRESP: đọc lỗi trả 0 cho CPU, lỗi đầu tiên được chốt vào thanh ghi
+`BUSERR`/`BUSERR_ADDR` và cổng `bus_error`. CPU **không có trap** khi lỗi bus (không có CSR),
+phần mềm phải tự đọc `BUSERR`.
+
+### 4.4 Thanh ghi ngoại vi
+
+**Timer** (`0x4000_0080`, [timer.v](rtl/Peripherals/timer.v))
+
+| Offset | Tên | Mô tả |
+|---|---|---|
+| `0x00` | LEGACY | one-shot gốc: ghi = nạp compare và chạy, đọc = bộ đếm |
+| `0x04` | PERIOD | số chu kỳ giữa hai tick (≥ 2) |
+| `0x08` | CTRL | bit0 ENABLE, bit1 PERIODIC, bit2 PERIOD_INVALID (RO) |
+| `0x0C` | TICK_COUNT | số tick từ reset (RO) |
+
+**Bộ ngắt** (`0x4000_01C0`, [interrupt_axi_wrapper.v](rtl/Peripherals/interrupt_axi_wrapper.v)).
+Nguồn: `IRQ_TIMER = 0`, `IRQ_FIR = 1` (0 ưu tiên cao hơn). Pending bắt theo cạnh lên.
+
+| Offset | Tên | Mô tả |
+|---|---|---|
+| `0x00` | ENABLE | bit[1:0] cho phép từng nguồn |
+| `0x04` | PENDING | cờ đang chờ (RO) |
+| `0x08` | ACK | ghi `(id << 1) \| 1` để xóa pending của nguồn `id` |
+| `0x0C` | STATUS | bit0 có ngắt, bit[3:1] nguồn ưu tiên cao nhất (RO); đọc STATUS cũng là "claim" |
+| `0x10` | BUSERR | bit0 valid, bit1 ghi, bit[3:2] mã lỗi (2 = SLVERR, 3 = DECERR), bit4 overflow; ghi bit0 = 1 để xóa |
+| `0x14` | BUSERR_ADDR | địa chỉ bus của lỗi đầu tiên (RO) |
+
+ISR chuẩn: đọc STATUS, ghi lại đúng giá trị đó vào ACK **ngay đầu ISR**, rồi mới phục vụ nguồn.
+ACK trễ của sự kiện cũ không xóa sự kiện mới đến sau lần đọc STATUS (sửa lỗi I1).
+
+**FIR11** (`0x4000_0200`, [fir11_wrapper.v](rtl/Peripherals/fir11_wrapper.v))
+
+| Offset | Tên | Mô tả |
+|---|---|---|
+| `0x00` | DATA_IN | ghi = chốt mẫu x và chạy một lần tính; đang bận thì bỏ mẫu và bật overrun |
+| `0x04` | DATA_OUT | y đã chốt; đọc thì xóa done |
+| `0x08` | STATUS | bit0 done, bit1 ap_idle, bit2 ap_ready, bit3 busy, bit4 overrun |
+| `0x0C` | CTRL | bit0 xóa done/overrun, bit1 reset mềm IP |
+| `0x10` | CYC_CNT | số chu kỳ bận của giao dịch gần nhất (đo được 17) |
+
+`fir_irq = done` (mức). Lịch sử mẫu của FIR **không bị reset xóa** (nằm trong RAM của IP), nên
+phần mềm phải gửi 10 mẫu 0 để xóa lịch sử trước khi xử lý dữ liệu mới.
+
+## 5. Yêu cầu công cụ
+
+| Công cụ | Dùng cho | Ghi chú |
+|---|---|---|
+| Vivado 2026.1 (XSim) | mô phỏng, synthesis | mặc định `D:/vivado/2026.1/Vivado` |
+| GCC RISC-V kèm Vivado | build firmware, ảnh asm | `D:/vivado/2026.1/gnu/riscv/nt/bin/riscv64-unknown-elf-*` (GCC 13.4) |
+| Python 3 + numpy, scipy, matplotlib | script, dữ liệu, đồ thị | đã chạy với Python 3.14 |
+| Questa 10.7c (tùy chọn) | chỉ `vlog -lint` | `vsim` không có license runtime |
+| Vitis HLS 2024.1 (tùy chọn) | chỉ khi sinh lại IP FIR | |
+
+Các lệnh dưới đây chạy trong **Git Bash** tại thư mục gốc project. Có thể đặt
+`export XILINX_VIVADO=D:/vivado/2026.1/Vivado` để bỏ `--vivado-root`.
+
+## 6. Firmware
 
 ```bash
-export XILINX_VIVADO=D:/vivado/2026.1/Vivado
+python scripts/build_firmware.py --firmware <tên>     # -> firmware/build/[<tên>/] program.mem, data.mem, .elf, .dis, .map
 ```
 
-Các ví dụ bên dưới vẫn ghi `--vivado-root` đầy đủ.
+| Firmware | Nguồn | Chức năng | Testbench |
+|---|---|---|---|
+| `smoke` | `main.c` | CPU chạy C do GCC build, 12 kết quả trong signature | `tb_cpu_firmware` |
+| `fir_smoke` | `fir_smoke.c` | ghi 1 mẫu vào FIR qua AXI, chờ DONE, đọc kết quả | `tb_cpu_fir_firmware` |
+| `fir_stream` | `fir_stream.c` | 32 mẫu DMEM → FIR → DMEM (polling) | `tb_cpu_fir_stream` |
+| `ext_ram_test` | `ext_ram_test.c` | lw/sw RAM ngoài 64 KB | `tb_cpu_ext_ram_b/_c` |
+| `fir_1000` | `fir_1000.c` | 1 000 mẫu RAM ngoài → FIR → RAM ngoài (polling) | `tb_cpu_fir_1000/_c` |
+| `timer_irq_test` | `timer_irq_test.c` | Timer IRQ định kỳ → ISR → ACK → `mret`, kiểm ngữ cảnh | `tb_cpu_timer_irq_a/b/c` |
+| `fir_timer` / `fir_timer_stress` | `fir_timer.c` | Timer IRQ 10 kHz điều phối 32 mẫu, FIR IRQ trả kết quả (stress: PERIOD 100) | `tb_cpu_fir_timer[_stress]` |
+| `fir_timer_1000` / `_stress` | `fir_timer_1000.c` | như trên với 1 000 mẫu trong RAM ngoài | `tb_cpu_fir_timer_1000_*` |
 
-## Chạy nhanh toàn bộ luồng FIR
+Firmware IRQ dùng `startup_irq.S` + `linker_irq.ld` (vector `0x10` lưu thanh ghi caller-saved, gọi
+ISR C trong `fir_timer_isr.h`, `mret`). Các firmware khác dùng `startup.S` + `linker.ld`.
+
+Ràng buộc của CPU mà `build_firmware.py` kiểm tự động:
+
+- `-march=rv32i -mabi=ilp32 -Os`, không libc/libgcc; IMEM 1 KB, DMEM 1 KB (stack 256 byte ở cuối).
+- CPU không đọc dữ liệu từ IMEM: mọi hằng số nằm trong DMEM, nạp qua `data.mem`.
+- **Từ chối** các lệnh CPU giải mã sai dù thuộc RV32I: `lb/lh/lbu/lhu/sb/sh`, `bltu/bgeu`,
+  `sltu/sltiu`, cùng RV32M, FENCE, SYSTEM (riêng `mret` chỉ được phép ở `__trap_mret`).
+  Vì vậy firmware chỉ dùng `int`, không dùng `char`/`short`/`unsigned`, nhân/chia hay thư viện C.
+- Dữ liệu sinh tự động có sẵn trong repo; sinh lại hoặc kiểm bằng
+  `python scripts/gen_fir_stream_data.py [--check]` và `python scripts/gen_fir_1000_data.py [--check]`.
+
+## 7. Mô phỏng và regression
+
+Script [run_rtl_tests.py](scripts/run_rtl_tests.py) compile (`xvlog`), elaborate (`xelab`), mô phỏng
+(`xsim`), tự chép 2 file `.dat` của FIR, tự build firmware/ảnh asm. Một test chỉ PASS khi log có
+`TEST PASSED` và không có `ERROR`, `FATAL`, `TEST FAILED`. Log: `outfeed/<test>/simulate.log`.
 
 ```bash
-# 1. Tạo input.dat / expected.dat từ hệ số trong fir.cpp
-python data_test/fir_test/generate_fir_data.py
-
-# 2. Chạy RTL testbench với 6 bộ vector -> outfeed/<test>/actual.dat
-python scripts/run_rtl_tests.py --vivado-root D:/vivado/2026.1/Vivado --tests tb_fir11_vectors
-
-# 3. So sánh bit-exact + vẽ đồ thị -> data_test/fir_test/rtl_plots/
-python scripts/plot_fir_rtl_results.py
-
-# 4. Xem kết quả trong trình duyệt
-python scripts/view_fir_plots.py
-```
-
-## Chạy test RTL
-
-```bash
-# Regression mặc định (20 cấu hình, gồm I1/C4 và AXI fault; danh sách đầy đủ 56 cấu hình:
-# docs/PHASE5_VERIFICATION.md)
+# Regression mặc định: 20 cấu hình (khối FIR, AXI, AXI fault, RAM ngoài, CPU bus/fault, Timer,
+# ngắt, I1/C4, pipeline)
 python scripts/run_rtl_tests.py --vivado-root D:/vivado/2026.1/Vivado
 
-# Chỉ một vài test
-python scripts/run_rtl_tests.py --vivado-root D:/vivado/2026.1/Vivado --tests tb_fir11_wrapper tb_axi_fir
+# Firmware + IRQ + 1 000 mẫu (20 cấu hình) và ma trận 6 dataset x B/C (12 cấu hình)
+python scripts/run_rtl_tests.py --vivado-root D:/vivado/2026.1/Vivado --fir-matrix --tests \
+  tb_cpu_firmware tb_cpu_fir_firmware tb_cpu_fir_stream tb_cpu_ext_ram_b tb_cpu_ext_ram_c \
+  tb_cpu_fir_1000 tb_cpu_fir_1000_c tb_cpu_timer_irq_a tb_cpu_timer_irq_b tb_cpu_timer_irq_c \
+  tb_cpu_fir_timer tb_cpu_fir_timer_stress tb_cpu_fir_timer_1000_b tb_cpu_fir_timer_1000_c \
+  tb_cpu_fir_timer_1000_stress_b tb_cpu_fir_timer_1000_stress_c tb_cpu_fir_timer_1000_reset_b \
+  tb_cpu_fir_timer_1000_reset_c tb_cpu_fir_timer_1000_late_b tb_cpu_fir_timer_1000_late_c
 
-# Đổi seed cho test có random
-python scripts/run_rtl_tests.py --vivado-root D:/vivado/2026.1/Vivado --tests tb_ext_ram_axi_b tb_ext_ram_axi_c --seed 7
+# 4 negative test: PHẢI kết thúc bằng TEST FAILED với lỗi ngân sách thời gian (chạy từng test)
+python scripts/run_rtl_tests.py --vivado-root D:/vivado/2026.1/Vivado --tests tb_cpu_fir_timer_1000_timing_fault_b
+#   ... tương tự: _timing_fault_c, _jitter_fault_b, _jitter_fault_c
 ```
 
-Mỗi lần chạy, script compile (`xvlog`), elaborate (`xelab`) rồi mô phỏng (`xsim`). Nó cũng tự
-chép 2 file ROM/RAM `.dat` của HLS vào `outfeed/<testbench>/`. Một test chỉ được tính là PASS
-khi log có `TEST PASSED` và không có `ERROR`, `FATAL` hay `TEST FAILED`. Script trả về exit 0
-nếu tất cả PASS, exit 1 nếu có lỗi.
+Runner dừng ở test FAIL đầu tiên, nên các negative test phải chạy riêng. Kết quả mong đợi:
+`timing_fault` báo `fixed tick -> accept budget`, `fixed tick -> stored budget`,
+`fixed accept jitter budget`; `jitter_fault` báo `fixed accept jitter budget`.
+[verify_phase41.py](scripts/verify_phase41.py) `--suite matrix|special|regression|mutations` chạy
+song song các nhóm này và tự kiểm lý do "đỏ" của negative test.
 
-| Testbench | Nội dung |
+| Tùy chọn `run_rtl_tests.py` | Ý nghĩa |
 |---|---|
-| `tb_fir11_wrapper` | wrapper + FIR HLS thật: số âm, tràn 32-bit, overrun, xóa done, reset mềm |
-| `tb_fir11_vectors` | 6 bộ vector `data_test/fir_test/output`, so bit-exact, ghi `actual.dat` |
-| `tb_axi_fir` | interconnect + wrapper + HLS: hàng đợi, backpressure, strobe |
-| `tb_ext_ram_cfgA` | cấu hình không có RAM ngoài |
-| `tb_ext_ram_axi_b` / `_c` | RAM ngoài, bypass / có cache (random theo seed) |
-| `tb_cpu_bus_b` / `_c` | CPU thật + FIR + IRQ + RAM, bypass / có cache |
-| `tb_axi_fault` | interconnect: DECERR/SLVERR, timeout RAM ngoài, backpressure, scoreboard (A1/A2) |
-| `tb_cpu_fault_b` / `_c` | CPU: SLVERR/DECERR + thanh ghi BUSERR, timeout đọc/ghi, phục hồi |
-| `tb_irq_i1` | FIR IRQ khi gửi DATA_IN trước ACK (I1) |
-| `tb_cpu_irq_c4_a` / `_b` / `_c` | ACK sát MRET, ngắt chen giữa ACK/MRET (C4); ảnh asm từ `tb/asm/irq_dir.S` |
-| `tb_timer`, `tb_irq_ack`, `tb_id_ex_reg`, `tb_cpu_flush_hold_b` / `_c` | Timer, ACK pin-level, ID/EX flush+hold |
-
-Kết quả Phase 5 (56/56 cấu hình, synthesis, timing): [docs/PHASE5_VERIFICATION.md](docs/PHASE5_VERIFICATION.md).
-
-## Synthesis Vivado (không tạo bitstream)
-
-```bash
-# Top soc_top, cấu hình A, firmware fir_timer, clock 100 MHz (fpga/soc_top.xdc), synth + place/route
-python scripts/run_vivado_synth.py --vivado-root D:/vivado/2026.1/Vivado --impl
-```
-
-Kết quả: synthesis PASS, **timing 100 MHz FAIL** (WNS −3,247 ns, Fmax ≈ 75 MHz; 50 MHz đạt).
-`fpga/soc_top.xdc` chỉ có ràng buộc clock, chưa gán chân (board chưa xác định).
-
-Test firmware (tùy chọn, cần GCC RISC-V của Vivado, chỉ chạy khi gọi tên qua `--tests`; mỗi test
-tự build firmware trước khi mô phỏng):
-
-| Testbench | Firmware | Nội dung |
-|---|---|---|
-| `tb_cpu_firmware` | `main.c` | Bước 1: CPU chạy C do GCC build, 12 kết quả trong signature DMEM |
-| `tb_cpu_fir_firmware` | `fir_smoke.c` | Bước 2: CPU ghi 7 vào FIR qua AXI, chờ DONE, đọc 378 |
-| `tb_cpu_fir_stream` | `fir_stream.c` | Bước 3: 32 mẫu DMEM -> FIR -> DMEM, so 32/32 với mô hình |
-| `tb_cpu_ext_ram_b` / `_c` | `ext_ram_test.c` | Bước 4a: lw/sw RAM ngoài, không cache / có cache |
-| `tb_cpu_fir_1000` / `_c` | `fir_1000.c` | Bước 4: 1000 mẫu RAM ngoài -> FIR -> RAM ngoài, không cache / có cache |
-
-Các tùy chọn của `run_rtl_tests.py`:
-
-| Tùy chọn | Ý nghĩa |
-|---|---|
-| `--tests T1 T2 ...` | chỉ chạy các testbench này |
+| `--tests T1 T2 ...` | chỉ chạy các test này |
+| `--fir-matrix` | thêm 12 cấu hình 6 dataset × B/C |
 | `--seed N` | seed cho test random (mặc định 1) |
 | `--output DIR` | thư mục kết quả (mặc định `outfeed/`) |
-| `--wave` | elaborate với `-debug typical`, ghi mọi tín hiệu vào `outfeed/<tb>/<tb>.wdb` |
-| `--open-wave TB` | mở `outfeed/TB/TB.wdb` trong XSim GUI |
-| `--vector-dir DIR` | bộ vector khác cho `tb_fir11_vectors`; khi đó `actual.dat` ghi vào `<output>/tb_fir11_vectors/actual/` |
-| `--outfeed-dir DIR` | nơi ghi `<test>/actual.dat` |
-| `--rtl-root DIR` | chạy regression trên một bản RTL khác |
+| `--wave` / `--open-wave TB` | ghi waveform `outfeed/<tb>/<tb>.wdb` / mở trong XSim GUI |
+| `--rtl-root DIR` | chạy trên một bản RTL khác (ví dụ mutant) |
+| `--no-firmware-build` | dùng lại image firmware đã build |
+| `--firmware-src DIR` | nguồn firmware khác (thử nghiệm đột biến) |
+| `--vector-dir DIR`, `--outfeed-dir DIR` | bộ vector khác / nơi ghi `actual.dat` cho `tb_fir11_vectors` |
 
-Kết quả của `tb_fir11_vectors` in ra theo dạng:
-
-```text
-INFO VEC test_01_low: PASS 1000/1000 samples match
-...
-INFO VEC TOTAL: 6/6 tests PASS, 6000/6000 samples match, 0 mismatch
-TEST PASSED
-```
-
-Log đầy đủ nằm ở `outfeed/<testbench>/simulate.log`; lỗi compile hay elaborate xem ở
-`compile.log` và `elaborate.log` trong cùng thư mục.
-
-## Compile thủ công
-
-### XSim (Vivado)
-
-Ví dụ compile và chạy riêng khối FIR (wrapper + HLS) trong một thư mục tùy chọn:
+**Compile thủ công khối FIR** (XSim):
 
 ```bash
-V=D:/vivado/2026.1/Vivado/bin
-P=$(pwd)                                    # thư mục gốc project
-bash scripts/prep_fir11_dat.sh sim_fir11    # chép 2 file .dat của HLS
-cd sim_fir11
-
+V=D:/vivado/2026.1/Vivado/bin; P=$(pwd)
+bash scripts/prep_fir11_dat.sh sim_fir11 && cd sim_fir11
 $V/xvlog.bat $P/rtl/Peripherals/fir11_wrapper.v $P/rtl/Peripherals/FIR11/*.v $P/tb/tb_fir11_wrapper.v
 $V/xelab.bat tb_fir11_wrapper -s tb_fir11_wrapper -debug typical
 $V/xsim.bat  tb_fir11_wrapper -runall
 ```
 
-RTL của HLS nạp ROM hệ số bằng `$readmemh("./<tên>.dat")`, tức là đọc theo **thư mục làm việc
-của simulator**. Thiếu 2 file `.dat` thì testbench báo `TEST FAILED: HLS ROM/RAM .dat not loaded`.
-`run_rtl_tests.py` tự chép các file này, còn khi chạy tay thì dùng `prep_fir11_dat.sh`.
-Thư mục `sim_fir11/` đã được gitignore.
+Compile cả SoC: lấy nguồn trong `rtl/filelist_fir11.f` (+ `rtl/filelist_ext_ram_sim.f` cho B/C) với
+`-i rtl/packages -i tb`, giống cách `run_rtl_tests.py` làm. Lint: `vlog -lint +incdir+rtl/packages <nguồn>`
+(Questa), kết quả hiện tại `Errors: 0, Warnings: 0`.
 
-Muốn compile cả SoC thì lấy danh sách nguồn trong `rtl/filelist_fir11.f` (thêm
-`rtl/filelist_ext_ram_sim.f` cho cấu hình RAM ngoài) với `-i rtl/packages -i tb`, giống cách
-`run_rtl_tests.py` đang làm.
+## 8. Danh sách testbench
 
-### Lint bằng Questa
+**Regression mặc định (20 cấu hình)**
 
-```bash
-mkdir -p sim_lint && cd sim_lint && vlib work
-vlog -lint ../rtl/Peripherals/fir11_wrapper.v ../rtl/Peripherals/FIR11/*.v ../tb/tb_fir11_vectors.v
-```
+| Testbench | Kiểm tra |
+|---|---|
+| `tb_fir11_wrapper` | wrapper + FIR HLS: số âm, tràn 32-bit, overrun, xóa done, reset mềm, `CYC_CNT` |
+| `tb_fir11_vectors` | 6 bộ vector, bit-exact 6 000 mẫu, ghi `outfeed/<test>/actual.dat` |
+| `tb_axi_fir` | interconnect + FIR: hàng đợi, backpressure, WSTRB/lệch → SLVERR |
+| `tb_axi_fault` | interconnect: DECERR/SLVERR, timeout RAM ngoài, backpressure ngẫu nhiên, scoreboard 3 000 giao dịch |
+| `tb_ext_ram_cfgA` | cấu hình A: vùng RAM không map → DECERR, không có yêu cầu bộ nhớ |
+| `tb_ext_ram_axi_b` / `_c` | RAM ngoài B/C: ranh giới địa chỉ, cache hit/miss/refill, refresh, truy cập ngẫu nhiên theo seed |
+| `tb_cpu_bus_b` / `_c` | CPU thật + FIR + IRQ + RAM: stall, forwarding, không ghi trùng |
+| `tb_cpu_fault_b` / `_c` | CPU: SLVERR/DECERR, thanh ghi BUSERR, timeout đọc/ghi, phục hồi, reset |
+| `tb_timer` | Timer định kỳ: pha, PERIOD, ENABLE, TICK_COUNT |
+| `tb_irq_ack` | ACK đúng nguồn, cạnh mới trùng ACK, ưu tiên (439 kiểm tra) |
+| `tb_irq_i1` | FIR IRQ khi gửi DATA_IN trước ACK (lỗi I1) |
+| `tb_cpu_irq_c4_a` / `_b` / `_c` | ACK sát `mret`, ngắt chen giữa ACK/`mret` (lỗi C4), dùng ảnh `tb/asm/irq_dir.S` |
+| `tb_id_ex_reg`, `tb_cpu_flush_hold_b` / `_c` | thanh ghi ID/EX khi flush và hold cùng lúc |
 
-Kết quả mong đợi là `Errors: 0, Warnings: 0`. Questa ở đây chỉ dùng để lint, không chạy
-`vsim` được vì thiếu license.
+**Firmware và ứng dụng (36 cấu hình, gọi tên qua `--tests`)**: các testbench trong bảng
+[mục 6](#6-firmware), cộng các biến thể của `tb_cpu_fir_timer_1000`: 6 dataset × B/C, `stress`,
+`reset`, `late` (B/C) và 4 negative test `timing_fault`/`jitter_fault` (B/C).
+Testbench không tin signature của firmware: chúng quan sát giao dịch CPU/AXI/FIR/RAM và so với mô
+hình tham chiếu riêng.
 
-## Firmware C trên CPU RISC-V
+## 9. FIR HLS IP và dữ liệu kiểm chứng
 
-```bash
-# Build riêng một firmware (mặc định smoke): firmware/build[/<tên>]/<tên>.elf, .dis, .map,
-# program.mem, data.mem (+ symbols.mem cho fir_stream, ext_ram_test, fir_1000)
-python scripts/build_firmware.py --firmware smoke|fir_smoke|fir_stream|ext_ram_test|fir_1000
+### 9.1 Nguồn gốc IP
 
-# Build + chạy toàn bộ Bước 1-4 trên SoC thật (XSim), từ repo sạch
-python scripts/run_rtl_tests.py --vivado-root D:/vivado/2026.1/Vivado --tests     tb_cpu_firmware tb_cpu_fir_firmware tb_cpu_fir_stream     tb_cpu_ext_ram_b tb_cpu_ext_ram_c tb_cpu_fir_1000 tb_cpu_fir_1000_c
-```
+- Nguồn C: [hls/FIR11/FIR11/fir.cpp](hls/FIR11/FIR11/fir.cpp). Vitis HLS 2024.1, top `fir`, thiết bị
+  `xc7z020-clg484-1`. Báo cáo HLS
+  ([fir_csynth.rpt](hls/FIR11/FIR11/fir11_prj/fir/hls/syn/report/fir_csynth.rpt)): latency 18, interval 19.
+  Wrapper đo `CYC_CNT = 17` (đếm từ lúc nhận DATA_IN tới `ap_done`).
+- 8 file trong [rtl/Peripherals/FIR11/](rtl/Peripherals/FIR11/) được **chép nguyên trạng** từ
+  `hls/FIR11/FIR11/fir11_prj/fir/hls/syn/verilog/` (không sửa tên module, hệ số, `$readmemh`).
+  Hai thư mục giống nhau từng byte; **chỉ đưa một bộ module `fir` vào mỗi lần biên dịch**.
+- Nếu chạy lại HLS: chép lại cả 8 file và cập nhật bảng SHA-256 dưới đây.
 
-Dữ liệu sinh tự động đã có sẵn trong repo (`firmware/fir_stream_data.h`, `firmware/fir_1000_data.h`,
-`data_test/fir_1000/`). Chỉ cần sinh lại khi đổi dữ liệu; `--check` xác nhận file trong repo khớp script:
+| File | SHA-256 |
+|---|---|
+| `fir.v` | `abbee508578dc96d2b1d71c7dc1a9713b20e332c868a378b8cdfb31f3859da4a` |
+| `fir_fir_Pipeline_Shift_Accum_Loop.v` | `c24040dbd356f434d8b579e7e8ad22e80623f29c9fa761623e7abe02e4e07b73` |
+| `fir_fir_Pipeline_Shift_Accum_Loop_fir_int_int_c_ROM_AUTO_1R.v` | `d1b1fa395ceb837ea34623ffab5b06a1bbc131ec433d54209520819395590eef` |
+| `fir_fir_Pipeline_Shift_Accum_Loop_shift_reg_RAM_AUTO_1R1W.v` | `9f2fd0c014c538a7d9b98b997ca1ee6b42c17221ed8fee8284de6d34dbb1800b` |
+| `fir_flow_control_loop_pipe_sequential_init.v` | `398725a9a4fd66384fdf1b04ac25e54faca56a534928e48829d5290e1bd8e305` |
+| `fir_mul_11s_32s_32_2_1.v` | `fa71e94bdb4b891825a364701360599f8a99825064b6885777884cbe37de9009` |
+| `fir_fir_Pipeline_Shift_Accum_Loop_fir_int_int_c_ROM_AUTO_1R.dat` | `351eef83b1a2cd212ab13ba97212401cce4171b8e244f799c4ff1d20413d7466` |
+| `fir_fir_Pipeline_Shift_Accum_Loop_shift_reg_RAM_AUTO_1R1W.dat` | `d88918b810dfe5f03f2409f9b5524274099f73aceee96c05cbbac7330a1a995b` |
 
-```bash
-python scripts/gen_fir_stream_data.py [--check]
-python scripts/gen_fir_1000_data.py [--check]     # nguồn: data_test/fir_test/output/test_04_noise
-```
+Kiểm lại: `sha256sum rtl/Peripherals/FIR11/*.v rtl/Peripherals/FIR11/*.dat`.
 
-Bước 4 dùng `soc_top #(ENABLE_EXT_RAM=1)`: RAM ngoài 64 KB tại CPU `0x4001_0000`
-(`input[1000]` @ `0x4001_0000`, `output[1000]` @ `0x4001_1000`). `sdram_model` không có `$readmemh`,
-nên `tb_cpu_fir_1000` nạp `input.mem` vào mô hình trước khi thả reset (chỉ dữ liệu kích thích;
-trên FPGA thật cần bootloader/UART/DMA, SoC chưa có).
-
-- **Toolchain:** `D:/vivado/2026.1/gnu/riscv/nt/bin/riscv64-unknown-elf-*` (bên trong là GCC 13.4),
-  build với `-march=rv32i -mabi=ilp32 -Os`, không libc, không libgcc.
-- **Bộ nhớ:** IMEM 1 KB tại `0x0000_0000` (`_start` = reset PC), DMEM 1 KB tại `0x1000_0000`
-  (`.rodata`, `.data`, `.bss`, stack 256 byte ở cuối, căn 16 byte). CPU không đọc dữ liệu từ
-  IMEM, nên mọi hằng số đều nằm trong DMEM và được nạp bằng `data.mem`.
-- **Kiểm tra ISA:** `build_firmware.py` giải mã từng lệnh và **từ chối** các lệnh CPU này giải mã
-  sai dù chúng thuộc RV32I: `lb/lh/lbu/lhu/sb/sh` (CPU chạy như `lw/sw`), `bltu/bgeu` (không bao
-  giờ rẽ), `sltu/sltiu` (tính ra AND/ADD), cùng RV32M, FENCE và SYSTEM. Vì vậy firmware chỉ dùng
-  `int`, không dùng `char`/`short`, `unsigned`, phép nhân/chia hay thư viện C.
-- **Signature** ở đầu DMEM (`0x1000_0000`): status, `HALT` (do `startup.S` ghi), mã trả về và các
-  trường riêng của từng firmware (mô tả ở đầu mỗi file `.c`). Testbench **không** tin signature: nó
-  quan sát giao dịch CPU/AXI/FIR/RAM và so kết quả với mô hình tham chiếu riêng.
-- Các test firmware không nằm trong regression mặc định, vì cần toolchain; muốn chạy phải gọi tên
-  qua `--tests`. Thêm `--no-firmware-build` để dùng lại image đã build. Log ở
-  `outfeed/<testbench>/simulate.log`.
-
-## Waveform
-
-```bash
-# 1. Chạy test có ghi waveform -> outfeed/<tb>/<tb>.wdb
-python scripts/run_rtl_tests.py --vivado-root D:/vivado/2026.1/Vivado --tests tb_fir11_wrapper --wave
-
-# 2. Mở waveform trong XSim GUI
-python scripts/run_rtl_tests.py --vivado-root D:/vivado/2026.1/Vivado --open-wave tb_fir11_wrapper
-```
-
-- `--wave` ghi toàn bộ tín hiệu (`log_wave -r /`). Kích thước tham khảo:
-  `tb_fir11_wrapper.wdb` khoảng 0,4 MB, `tb_fir11_vectors.wdb` khoảng 24 MB.
-- `--open-wave` gọi launcher chính thức `bin/xsim.bat -gui <tb>.wdb`. Lần đầu GUI mất khoảng
-  10–20 giây để nạp. Trong GUI, kéo tín hiệu từ cửa sổ *Scope/Objects* vào cửa sổ wave, ví dụ
-  `dut/ap_start`, `dut/ap_done`, `dut/busy_q`, `dut/x_q`, `dut/y_q`.
-- Nếu chạy tay thì dùng `$V/xsim.bat -gui <tb>.wdb` ngay trong thư mục `outfeed/<tb>/`.
-- Chạy test lại mà không có `--wave` sẽ không cập nhật file `.wdb` cũ. Muốn waveform khớp với
-  lần chạy mới nhất thì chạy lại với `--wave`.
-
-## Tạo dữ liệu tham chiếu FIR
-
-```bash
-python data_test/fir_test/generate_fir_data.py
-```
-
-Script này đọc 11 hệ số trực tiếp từ `hls/FIR11/FIR11/fir.cpp`; nếu không đọc được thì dừng,
-không tự thiết kế hệ số mới. Nó tạo `input.dat` và `expected.dat` cho 6 test, tính theo
-`y[n] = Σ c[k]·x[n−k]` với số nguyên signed 32-bit, wrap khi tràn, không chia SCALE, và lịch
-sử 10 mẫu bằng 0 ở đầu mỗi test. Kết quả còn được kiểm lại bằng một vòng lặp Python thuần.
-Báo cáo của bước này nằm ở `data_test/fir_test/output/summary.txt`.
-
-## Phân tích và xem đồ thị RTL vs Python
-
-### Vẽ đồ thị
-
-```bash
-python scripts/plot_fir_rtl_results.py
-```
-
-Script đọc `input.dat` và `expected.dat` từ `data_test/fir_test/output/`, đọc `actual.dat` từ
-`outfeed/`, so sánh bit-exact từng mẫu (không tolerance, không dịch chuỗi), rồi tạo:
+### 9.2 Hai file `.dat` bắt buộc
 
 | File | Nội dung |
 |---|---|
-| `rtl_plots/<test>/time_domain.png` | input, expected, actual: toàn bộ 1000 mẫu + vùng phóng to |
-| `rtl_plots/<test>/frequency_domain.png` | FFT: Hann + bỏ quá độ với sin; DFT không cửa sổ với xung/bậc |
-| `rtl_plots/<test>/error.png` | `actual − expected`, hiển thị `BIT-EXACT PASS` hoặc `FAIL` kèm mẫu sai đầu tiên |
-| `rtl_plots/fir_rtl_comparison.png` | hình tổng hợp mixed + noise (thời gian, FFT, sai số) cho báo cáo |
-| `rtl_plots/summary.txt` | số mẫu khớp, max \|error\|, độ lợi 500/4000 Hz đo được so với lý thuyết |
+| `fir_..._fir_int_int_c_ROM_AUTO_1R.dat` | 11 hệ số của ROM |
+| `fir_..._shift_reg_RAM_AUTO_1R1W.dat` | 11 số 0, giá trị đầu của `shift_reg` |
 
-Mỗi hình được lưu hai bản cùng tên: `.png` (200 dpi, 2600 px ngang, dùng để chèn báo cáo)
-và `.svg` (vector, phóng to bao nhiêu cũng nét; trang HTML hiển thị bản này).
+RTL HLS nạp chúng bằng `$readmemh("./<tên>.dat")`, tức là **tương đối với thư mục làm việc** của
+simulator/Vivado. Thiếu file thì ROM hệ số là X và kết quả FIR sai; testbench báo
+`TEST FAILED: HLS ROM/RAM .dat not loaded`. Cách cung cấp:
 
-Script trả exit 0 khi cả 6 test bit-exact, exit 1 khi có test FAIL hoặc thiếu `actual.dat`.
-Thiếu file thì test đó bị báo ERROR; script không bao giờ dùng `expected.dat` thay cho `actual.dat`.
+- `run_rtl_tests.py`: tự chép vào `outfeed/<test>/`.
+- Chạy tay: `bash scripts/prep_fir11_dat.sh <thư mục mô phỏng>`.
+- Synthesis: `fpga/synth_soc.tcl` chép vào thư mục chạy Vivado; `run_vivado_synth.py` bắt buộc log có
+  `$readmem data file ... is read successfully` cho cả 2 file `.dat` và `program.mem`, `data.mem`.
 
-### Xem trong cửa sổ đồ thị (zoom/pan như MATLAB)
+Hai file này là dữ liệu của IP FIR, khác `program.mem`/`data.mem` (lệnh và dữ liệu của CPU).
 
-```bash
-python scripts/view_fir_plots.py 3 --window   # 3 cửa sổ của test 3: thời gian, tần số, sai số
-python scripts/view_fir_plots.py --window     # cửa sổ hình tổng hợp mixed + noise
-```
-
-Các hình được vẽ lại trực tiếp từ `outfeed/` và `output/`, nên không phụ thuộc file PNG cũ.
-Dùng thanh công cụ dưới cửa sổ: kính lúp để zoom vùng, mũi tên 4 chiều để kéo, Home để về
-ban đầu, đĩa mềm để lưu hình. Đóng hết các cửa sổ thì lệnh kết thúc.
-
-### Xem bằng MATLAB
-
-Trong MATLAB (Command Window), đứng ở thư mục gốc project:
-
-```matlab
-cd scripts
-view_fir_plots(1)        % test_01_low     - sin 500 Hz
-view_fir_plots(2)        % test_02_high    - sin 4000 Hz
-view_fir_plots(3)        % test_03_mixed   - 500 Hz + 4000 Hz
-view_fir_plots(4)        % test_04_noise   - 500 Hz + 4000 Hz + nhiễu
-view_fir_plots(5)        % test_05_impulse - đáp ứng xung
-view_fir_plots(6)        % test_06_step    - đáp ứng bậc
-view_fir_plots()         % hình tổng hợp mixed + noise
-view_fir_plots('list')   % in trạng thái bit-exact 6 test, không vẽ
-```
-
-Hoặc mở thẳng từ Git Bash: `matlab -r "cd scripts; view_fir_plots(3)"`.
-
-- Mỗi test mở 3 figure: miền thời gian, miền tần số và sai số. Command Window in kết quả
-  bit-exact và độ lợi 500/4000 Hz đo được so với lý thuyết.
-- Script đọc trực tiếp `input.dat`, `expected.dat` (`data_test/fir_test/output/`), `actual.dat`
-  (`outfeed/`) và hệ số `c[]` trong `fir.cpp`, nên không phụ thuộc bản Python. Cách so sánh và
-  đo độ lợi giống hệt bản Python, và kết quả đã đối chiếu là trùng nhau.
-- Script không ghi file nào. Muốn lưu hình thì dùng menu *File → Save As* của figure, hoặc
-  `exportgraphics(gcf, 'hinh.png', 'Resolution', 300)`.
-- Chỉ dùng hàm MATLAB gốc, không cần toolbox. Đã chạy thử với MATLAB R2024b.
-
-### Xem từng test trong trình duyệt
-
-Gọi theo số thứ tự của test:
+### 9.3 Dữ liệu kiểm chứng và đồ thị
 
 ```bash
-python scripts/view_fir_plots.py      # trang tổng quan: bảng PASS/FAIL + độ lợi
-python scripts/view_fir_plots.py 1    # test_01_low     - sin 500 Hz
-python scripts/view_fir_plots.py 2    # test_02_high    - sin 4000 Hz
-python scripts/view_fir_plots.py 3    # test_03_mixed   - 500 Hz + 4000 Hz
-python scripts/view_fir_plots.py 4    # test_04_noise   - 500 Hz + 4000 Hz + nhiễu
-python scripts/view_fir_plots.py 5    # test_05_impulse - đáp ứng xung
-python scripts/view_fir_plots.py 6    # test_06_step    - đáp ứng bậc
+python data_test/fir_test/generate_fir_data.py     # input.dat/expected.dat từ hệ số trong fir.cpp
+python scripts/run_rtl_tests.py --vivado-root D:/vivado/2026.1/Vivado --tests tb_fir11_vectors
+python scripts/plot_fir_rtl_results.py             # so bit-exact, vẽ đồ thị -> data_test/fir_test/rtl_plots/
+python scripts/view_fir_plots.py [1-6] [--window]  # xem trong trình duyệt / cửa sổ Python
 ```
 
-Tùy chọn thêm:
+| Test | Tín hiệu (1 000 mẫu, FS = 10 kHz) |
+|---|---|
+| `test_01_low` | sin 500 Hz |
+| `test_02_high` | sin 4 000 Hz |
+| `test_03_mixed` | 500 Hz + 4 000 Hz |
+| `test_04_noise` | 500 Hz + 4 000 Hz + nhiễu Gauss |
+| `test_05_impulse` | xung x[0] = 1 000 |
+| `test_06_step` | bậc x[n ≥ 100] = 1 000 |
+
+- `expected.dat`: `y[n] = Σ c[k]·x[n−k]`, số nguyên signed 32-bit, wrap khi tràn, lịch sử đầu bằng 0.
+  Script dừng nếu không đọc được hệ số từ `fir.cpp`.
+- `plot_fir_rtl_results.py` so từng mẫu, không tolerance; exit 1 nếu có test sai hoặc thiếu
+  `actual.dat` (không bao giờ dùng `expected.dat` thay thế). Mỗi hình có bản `.png` và `.svg`.
+- MATLAB: `cd scripts; view_fir_plots(3)` (không cần toolbox, đã chạy với R2024b).
+- `data_test/fir_1000/` (sinh bởi `gen_fir_1000_data.py` từ `test_04_noise`): 1 000 mẫu cho firmware
+  ở RAM ngoài, `input[1000]` tại `0x4001_0000`, `output[1000]` tại `0x4001_1000`.
+
+## 10. RAM ngoài: cache và SDRAM mô phỏng
+
+Chỉ dùng ở cấu hình B/C. Nguồn gốc: `cache_controller.v` và `sdram.v` từ tiny-riscv-soc (MIT),
+có sửa đổi ghi ở đầu mỗi file.
+
+```text
+axi_interconnect: WRITE_FSM / READ_FSM (giữ yêu cầu tới done, timeout -> SLVERR)
+   -> axi_ext_ram_arbiter (ghi trước đọc sau; chốt địa chỉ/dữ liệu khi cấp quyền; bỏ completion muộn)
+   -> cache_top #(USE_CACHE)
+        USE_CACHE=1: cache_controller  |  USE_CACHE=0: bypass
+        -> cache_dma_arbiter (đầu vào DMA buộc 0)
+        -> sdram_top = refresh_controller + sdram_fsm + sdram_controller + sdram_model
+```
+
+| Khối | Đặc điểm (đọc từ RTL) |
+|---|---|
+| Cache | direct-mapped 1 way, 64 line × 16 byte = 1 KB, chỉ dữ liệu. tag `addr[31:10]`, index `addr[9:4]`, word `addr[3:2]`. Đọc miss: refill 4 yêu cầu word riêng (không burst). Ghi: write-through, miss thì write-no-allocate. Valid bit xóa khi reset |
+| SDRAM controller | bus dữ liệu 16 bit, mỗi word = ACTIVATE → 2 halfword → PRECHARGE (không burst); refresh mỗi 780 chu kỳ; `ready` là xung 1 chu kỳ |
+| Ánh xạ địa chỉ (đã sửa so với bản gốc) | halfword `{bank,row,col} = addr[24:1]`, tuyến tính, không bí danh; bản gốc làm 0x000 và 0x400 trùng ô nhớ |
+| `sdram_model` | mảng 32 768 × 16 bit (64 KB), `initial` xóa 0, đọc trả sau 1 cạnh clock; không mô phỏng CAS latency, tRCD/tRP/tRFC, LOAD MODE |
+| Giới hạn đã biết (chưa sửa) | `refresh_controller`: nếu bộ đếm chạm chu kỳ refresh đúng lúc `refresh_done` thì yêu cầu refresh đó bị xóa; chỉ xảy ra khi refresh bị chặn đúng 780 chu kỳ |
+
+**Giới hạn FPGA**: `sdram_top` chứa luôn `sdram_model` và **không có chân ra ngoài**. Vivado tổng hợp được
+(64 KB → 17 BRAM36 ở cấu hình C) nhưng đó chỉ là BRAM bọc trong giao thức lệnh SDRAM, không phải
+chip SDRAM trên board. Trên FPGA hãy dùng cấu hình A. Cần thêm RAM thì thay `sdram_top` bằng backend
+BRAM trên cùng giao diện `cpu_*` (module `main_memory` trong `cache_controller.v` là tham chiếu, hiện
+không được instance) hoặc một controller/PHY SDRAM thật theo board.
+
+Testbench nạp dữ liệu vào `sdram_model` trực tiếp (model không có `$readmemh`); trên FPGA cần
+bootloader/UART/DMA để nạp dữ liệu, SoC chưa có.
+
+## 11. Kết quả kiểm chứng
+
+Regression XSim 2026.1 trên RTL hiện tại (chi tiết: [docs/PHASE5_VERIFICATION.md](docs/PHASE5_VERIFICATION.md)):
+
+| Nhóm | Cấu hình | Kết quả |
+|---|---|---|
+| Regression mặc định | 20 | 20 PASS |
+| Firmware smoke, fir_smoke, fir_stream, ext_ram B/C, fir_1000 B/C | 7 | 7 PASS |
+| Timer IRQ A/B/C, fir_timer, fir_timer_stress | 5 | 5 PASS |
+| fir_timer_1000 B/C, stress, reset, late (B/C) | 8 | 8 PASS |
+| Ma trận 6 dataset × B/C (1 000 mẫu, bit-exact) | 12 | 12 PASS |
+| Negative test timing_fault / jitter_fault (B/C) | 4 | 4 bị từ chối đúng dự kiến |
+| **Tổng** | **56** | **52 PASS + 4 negative đúng dự kiến, 0 FAIL ngoài dự kiến** |
+
+Các lỗi đã sửa và kiểm chứng ở giai đoạn gần nhất:
+
+| ID | Lỗi | Kiểm chứng |
+|---|---|---|
+| I1 | ACK trễ của sự kiện FIR cũ xóa mất ngắt của lần hoàn tất mới → kẹt luồng | quét độ trễ ACK 0–40 chu kỳ: 41/41 giữ ngắt (RTL cũ mất 24) |
+| C4 | `sw ACK; mret` sát nhau chỉ có biên 0 chu kỳ | biên ≥ 1 chu kỳ ở A/B/C, không ngắt lặp |
+| A1 | master bỏ qua BRESP/RRESP, địa chỉ không map trả OKAY | DECERR/SLVERR, thanh ghi BUSERR, đọc lỗi trả 0 |
+| A2 | RAM ngoài không trả lời làm CPU treo | timeout 1 024 chu kỳ → SLVERR; 49 052 kiểm tra AXI, 4/4 mutant RTL bị bắt |
+| S1 | reset không đồng bộ khi nhả | `reset_sync` 2 FF |
+
+## 12. Synthesis và timing
 
 ```bash
-python scripts/view_fir_plots.py 3 --window  # mở test 3 trong cửa sổ đồ thị thay cho trình duyệt
-python scripts/view_fir_plots.py 3 --regen   # vẽ lại từ outfeed/ rồi mở test 3
-python scripts/view_fir_plots.py --list      # in trạng thái 6 test ra terminal
-python scripts/view_fir_plots.py --no-open   # chỉ sinh HTML, không mở trình duyệt
+# cấu hình A, firmware fir_timer, synth + place & route, không tạo bitstream
+python scripts/run_vivado_synth.py --vivado-root D:/vivado/2026.1/Vivado --impl
+# chỉ synth cấu hình C (kiểm sdram_model)
+python scripts/run_vivado_synth.py --vivado-root D:/vivado/2026.1/Vivado --cfg C
 ```
 
-Mỗi trang có thanh chuyển giữa các test, số liệu của test và 3 đồ thị. Script sinh
-`rtl_plots/index.html` và `rtl_plots/<test>/index.html`. Tên đầy đủ (`test_03_mixed`) hoặc
-tên loại (`mixed`) vẫn dùng được nếu cần.
+Part `xc7z020clg484-1` (cùng part với báo cáo HLS; dùng để ước lượng tài nguyên/timing, board chưa
+xác định). Ràng buộc: [fpga/soc_top.xdc](fpga/soc_top.xdc) chỉ có clock 100 MHz, chưa gán chân.
 
-## Lưu ý
+| | Cấu hình A sau place & route | Cấu hình C sau synth |
+|---|---|---|
+| LUT | 2 533 (4,8 %) | 3 437 (6,5 %) |
+| Flip-flop | 2 460 (2,3 %) | 3 174 |
+| Latch | 0 | 0 |
+| BRAM36 | 1 (FIR) | 17 (sdram_model + FIR) |
+| DSP48 | 2 (nhân FIR) | 2 |
+| Khởi tạo bộ nhớ | `program.mem`, `data.mem`, 2 file `.dat` nạp thành công | như A |
+| Critical warning / error | 0 / 0 | 0 / 0 |
+| **Timing 100 MHz** | **FAIL**: WNS −3,247 ns, TNS −940 ns; hold đạt (WHS +0,056 ns) | ước lượng WNS −4,945 ns |
 
-- **Đường dẫn không được có khoảng trắng** với `tb_fir11_vectors` (`--output`, `--vector-dir`,
-  `--outfeed-dir`), vì xsim `-testplusarg` bị treo khi gặp khoảng trắng. Script sẽ báo lỗi ngay
-  thay vì treo.
-- **Lịch sử FIR không bị reset xóa.** `shift_reg` của IP nằm trong RAM, `ap_rst` không xóa nó.
-  Vì vậy `tb_fir11_vectors` gửi 10 mẫu 0 trước mỗi test; firmware cũng phải làm tương tự.
-- **`actual.dat` dùng xuống dòng CRLF** (XSim trên Windows). Nội dung số giống hệt
-  `expected.dat`; muốn so sánh bằng `cmp` thì bỏ `\r` trước.
-- **`outfeed/tb_*/` là file sinh ra**, đã gitignore và xóa được bất cứ lúc nào; chạy lại test
-  sẽ tạo lại. `outfeed/<test>/actual.dat` thì được git theo dõi.
-- Kết quả kiểm chứng RTL chi tiết và lịch sử sửa lỗi xem
-  [docs/RTL_FIX_VERIFICATION.md](docs/RTL_FIX_VERIFICATION.md).
+- **Synthesis PASS, timing 100 MHz FAIL.** Cùng netlist đã route: 75 MHz đạt WNS +0,086 ns (sát),
+  50 MHz đạt WNS +6,753 ns. Fmax ≈ 75 MHz.
+- Đường găng (13 tầng logic) nằm trong CPU: forwarding từ WB → ALU/so sánh nhánh ở EX → flush →
+  clock enable của IF/ID. Muốn đạt 100 MHz phải sửa pipeline CPU.
+
+## 13. Giới hạn và việc cần làm trước khi chạy FPGA
+
+Project **mới được kiểm chứng bằng mô phỏng và synthesis/implementation**, chưa chạy trên phần cứng.
+
+1. **Gán chân board**: thêm `PACKAGE_PIN`/`IOSTANDARD` cho `clk`, `rst_n` (tích cực mức thấp),
+   `cpu_irq`, `bus_error` vào XDC (nếu thiếu, `write_bitstream` sẽ dừng ở DRC NSTD/UCIO).
+2. **Clock**: 100 MHz không đạt timing. Dùng ≤ 75 MHz (khuyên 50 MHz qua MMCM) hoặc sửa pipeline CPU.
+   Khi đổi clock, chỉnh `FIR_TIMER_PERIOD` trong firmware (10 kHz = f_clk / 10 000).
+3. **Bộ nhớ**: dùng cấu hình A; B/C chỉ để mô phỏng (mục 10).
+4. **Quan sát**: chỉ có 2 chân trạng thái; cần thêm UART/GPIO hoặc ILA để đọc kết quả.
+5. **Firmware cố định lúc synthesis** (IMEM/DMEM `$readmemh`): đổi chương trình thì synth lại hoặc
+   dùng `updatemem`.
+
+Giới hạn khác của thiết kế: CPU là tập con RV32I (không có byte/halfword load-store, `bltu/bgeu`,
+`sltu`, M extension), không có CSR/trap ngoại lệ, một mức ngắt không lồng; IMEM/DMEM chỉ 1 KB;
+lỗi bus không gây trap (phần mềm đọc BUSERR); chưa kiểm chứng ISA đầy đủ.
+
+## 14. Tài liệu kiểm chứng chi tiết
+
+| Tài liệu | Nội dung | Trạng thái |
+|---|---|---|
+| [docs/PHASE5_VERIFICATION.md](docs/PHASE5_VERIFICATION.md) | I1/C4, AXI lỗi/timeout, reset sync, regression 56/56, synthesis/timing | **hiện tại** |
+| [docs/PHASE41_VERIFICATION.md](docs/PHASE41_VERIFICATION.md) | Giai đoạn 4.1: deadline checker, ma trận dataset, negative test | lịch sử (trước Phase 5) |
+| [docs/RTL_FIX_VERIFICATION.md](docs/RTL_FIX_VERIFICATION.md) | sửa lỗi AXI/FIR ban đầu, firmware Bước 1–4, Timer/FIR IRQ Giai đoạn 1–4 | lịch sử (trước Phase 5) |
+
+Hai báo cáo lịch sử ghi đúng trạng thái tại thời điểm đó; các điểm đã thay đổi được đánh dấu ở đầu mỗi file.
+
+## 15. Lưu ý khi sử dụng
+
+- **Đường dẫn không có khoảng trắng** cho `tb_fir11_vectors` (`--output`, `--vector-dir`,
+  `--outfeed-dir`): xsim `-testplusarg` treo khi gặp khoảng trắng; script báo lỗi trước.
+- **`actual.dat` dùng xuống dòng CRLF** (XSim trên Windows); bỏ `\r` trước khi so bằng `cmp`.
+- **Reset**: chân `rst_n` đi qua `reset_sync`, DUT ra khỏi reset sau 2 cạnh clock kể từ khi nhả chân.
+- Waveform: `--wave` ghi toàn bộ tín hiệu (ví dụ `tb_fir11_vectors.wdb` khoảng 24 MB);
+  `--open-wave <tb>` mở bằng `bin/xsim.bat -gui`.
+- `outfeed/tb_*/` và `outfeed/synth_*/` xóa được bất cứ lúc nào; chạy lại test/synthesis sẽ tạo lại.

@@ -1,5 +1,12 @@
 # AXI/FIR RTL fixes and verification — 2026-10-18
 
+> **Historical record (up to Giai đoạn 4.1, before Phase 5).** Results below describe the RTL at that time.
+> Superseded by Phase 5 (2026-10-21, [PHASE5_VERIFICATION.md](PHASE5_VERIFICATION.md)):
+> unmapped addresses now return **DECERR** (not OKAY); `cpu_axi_master` checks BRESP/RRESP (BUSERR
+> registers); an external-RAM access that never completes ends with **SLVERR after 1024 cycles**
+> (no CPU hang); `rst_n` goes through a reset synchronizer; Vivado synthesis has been run
+> (synthesis PASS, timing 100 MHz FAIL). The current overall status is in the [README](../README.md).
+
 ## Scope
 
 Fix AXI/FIR transport and integration defects found in the first review.
@@ -51,9 +58,9 @@ Vivado XSim 2026.1 ran the tests; Questa simulation could not acquire a license.
   **36 checks, 8 errors**, including a zero-strobe write clearing DONE.
 
 These were observed simulation failures, not conclusions from compilation.
-Local evidence directories are `D:/SoC/.tmp/fir-rtl-fix-baseline`,
-`D:/SoC/.tmp/fir-rtl-red` and `D:/SoC/.tmp/fir-rtl-strobes-red`.
-The pre-fix RTL was preserved in `D:/SoC/.tmp/fir-rtl-original/rtl`.
+Local evidence directories are `D:/SoC/verification_evidence/rtl_fix_2026-10-18/fir-rtl-fix-baseline`,
+`D:/SoC/verification_evidence/rtl_fix_2026-10-18/fir-rtl-red` and `D:/SoC/verification_evidence/rtl_fix_2026-10-18/fir-rtl-strobes-red`.
+The pre-fix RTL was preserved in `D:/SoC/verification_evidence/rtl_fix_2026-10-18/fir-rtl-original/rtl`.
 
 ## Final observed results
 
@@ -75,7 +82,7 @@ PRNG seed as it runs; its final summary therefore prints a different seed value.
 
 Independent Questa 10.7c `vlog -lint` of all RTL and five testbench modules
 completed with **0 errors, 0 warnings**. Its log is
-`D:/SoC/.tmp/fir-rtl-questa-lint/compile.log`; Questa runtime was not used.
+`D:/SoC/verification_evidence/rtl_fix_2026-10-18/fir-rtl-questa-lint/compile.log`; Questa runtime was not used.
 
 The CPU fixture verifies FIR(7)=378, dependent RAM load/store, held PC/pipeline
 and bus request, one FIR start/completion, one CPU completion per AXI response,
@@ -86,8 +93,8 @@ stall was **24 cycles in B** and **79 cycles in C** for this fixture.
 FIR wrapper `CYC_CNT` measured **17 cycles**. The HLS synthesis report's latency
 18/interval 19 is retained; neither number is a measured FPGA timing result.
 
-Final logs: `D:/SoC/.tmp/fir-rtl-final/<test>/simulate.log` and
-`D:/SoC/.tmp/fir-rtl-seed7/<test>/simulate.log`. Each run also has compile and
+Final logs: `D:/SoC/verification_evidence/rtl_fix_2026-10-18/fir-rtl-final/<test>/simulate.log` and
+`D:/SoC/verification_evidence/rtl_fix_2026-10-18/fir-rtl-seed7/<test>/simulate.log`. Each run also has compile and
 elaboration logs. The runner checks process status, failure messages and the
 explicit TEST PASSED marker; simulator exit code alone is insufficient.
 

@@ -1,5 +1,12 @@
 # Giai đoạn 4.1 — deadline checker và verification trước synthesis
 
+> **Báo cáo lịch sử (Giai đoạn 4.1, trước Phase 5).** Kết quả dưới đây mô tả RTL tại thời điểm đó.
+> Đã thay đổi ở Phase 5 (2026-10-21, [PHASE5_VERIFICATION.md](PHASE5_VERIFICATION.md)): địa chỉ không
+> map trả **DECERR**; `cpu_axi_master` kiểm BRESP/RRESP (thanh ghi BUSERR); RAM ngoài không trả lời thì
+> giao dịch kết thúc bằng **SLVERR sau 1 024 chu kỳ** (CPU không còn treo); có reset synchronizer; đã
+> chạy Vivado synthesis (synthesis PASS, timing 100 MHz FAIL). Mục "Giới hạn trước synthesis" bên dưới
+> vì vậy không còn đúng hoàn toàn. Trạng thái tổng thể hiện tại: [README](../README.md).
+
 Ngày chạy: 2026-10-21. Simulator: Vivado XSim 2026.1, CPU/AXI/FIR HLS thật,
 clock 100 MHz, backend `sdram_model` hiện có. Đây là verification mô phỏng;
 không synthesis, không thay backend RAM, không commit/push.
