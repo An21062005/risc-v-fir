@@ -9,7 +9,14 @@
 //     cổng ram_ready (SoC không có RAM trên bus, bản trước nối cứng ram_ready=1).
 //   - Giữ cấu trúc của 3 FSM gốc (decoder, write FSM,
 //     read FSM). Địa chỉ không thuộc slave nào: ghi bị bỏ qua, đọc ra 0,
-//     vẫn trả BRESP/RRESP = OKAY (bus không treo), giống bản gốc.
+//     BRESP/RRESP = DECERR (A1, 2026-10-21; bản gốc trả OKAY). Bus không treo.
+//   - A2 (2026-10-21): RAM ngoài có thể không trả lời (backend treo). Write FSM
+//     (WRITE_RESP) và read FSM (READ_WAIT) đếm chu kỳ chờ done; tới
+//     EXT_RAM_TIMEOUT thì hạ yêu cầu và trả SLVERR (RDATA = 0). Arbiter đánh dấu
+//     yêu cầu bị bỏ là "orphan": vẫn giữ mem_read/mem_write + địa chỉ/dữ liệu đã
+//     chốt tới khi backend trả mem_ready rồi NUỐT completion đó (không báo done
+//     cho giao dịch sau). Khi orphan còn treo, yêu cầu mới không được cấp và cũng
+//     hết hạn -> mọi giao dịch đều kết thúc trong thời gian chặn trên.
 // Giao thức với ngoại vi (regression: docs/RTL_FIX_VERIFICATION.md):
 //   - Ghi: *_wr_en là xung 1 chu kỳ, write_addr/write_data hợp lệ đúng chu kỳ đó.
 //   - Đọc: *_rd_en là xung 1 chu kỳ sau READ_DATA; ngoại vi chốt ở cạnh
@@ -112,7 +119,9 @@ endmodule
 
 `include "soc_pkg.vh"
 
-module axi_write_fsm (
+module axi_write_fsm #(
+    parameter EXT_RAM_TIMEOUT = 1024     // A2: chu kỳ chờ ext_ram_wr_done tối đa
+) (
 
     input wire clk,
     input wire rst_n,
@@ -174,6 +183,10 @@ module axi_write_fsm (
     reg        saved_ext_ram_sel;
     reg        ext_ram_wr_err;      // rejected RAM write (no memory request)
     reg        mmio_wr_err;
+    reg [15:0] wr_wait;             // A2: cycles waiting for ext_ram_wr_done
+
+    wire saved_none = !(saved_timer_sel || saved_interrupt_sel || saved_fir_sel || saved_ext_ram_sel);
+    wire wr_timeout = ext_ram_wr_req && !ext_ram_wr_done && (wr_wait == EXT_RAM_TIMEOUT - 1);
 
     wire mmio_wr_bad = (saved_awaddr[1:0] != 2'b00) ||
                        ((s_axi_wstrb != 4'b1111) && (s_axi_wstrb != 4'b0000));
@@ -229,6 +242,7 @@ module axi_write_fsm (
             ext_ram_wr_req      <= 1'b0;
             ext_ram_wr_addr     <= 32'd0;
             ext_ram_wr_data     <= 32'd0;
+            wr_wait             <= 16'd0;
         end
 
         else begin
@@ -253,6 +267,7 @@ module axi_write_fsm (
                 end
 
                 WRITE_DATA: begin
+                    wr_wait <= 16'd0;
                     if (s_axi_wvalid && s_axi_wready) begin
                         write_addr <= saved_awaddr;
                         write_data <= s_axi_wdata;
@@ -276,13 +291,18 @@ module axi_write_fsm (
                                 ext_ram_wr_data <= s_axi_wdata;
                             end
                         end
-                        // no slave selected: write is dropped, response still OKAY
+                        // no slave selected: write is dropped, response DECERR
                     end
                 end
 
                 WRITE_RESP: begin
                     if (!s_axi_bvalid) begin
-                        if (!saved_ext_ram_sel) begin
+                        if (saved_none) begin
+                            // unmapped address: nothing written
+                            s_axi_bvalid <= 1'b1;
+                            s_axi_bresp  <= `AXI_RESP_DECERR;
+                        end
+                        else if (!saved_ext_ram_sel) begin
                             // register peripherals are always-ready
                             s_axi_bvalid <= 1'b1;
                             s_axi_bresp  <= mmio_wr_err ? `AXI_RESP_SLVERR : `AXI_RESP_OKAY;
@@ -298,6 +318,14 @@ module axi_write_fsm (
                             s_axi_bvalid   <= 1'b1;
                             s_axi_bresp    <= `AXI_RESP_OKAY;
                         end
+                        else if (wr_timeout) begin
+                            // A2: backend did not answer -> give up, SLVERR
+                            ext_ram_wr_req <= 1'b0;
+                            s_axi_bvalid   <= 1'b1;
+                            s_axi_bresp    <= `AXI_RESP_SLVERR;
+                        end
+                        else if (ext_ram_wr_req)
+                            wr_wait <= wr_wait + 16'd1;
                     end
                     else if (s_axi_bready) begin
                         s_axi_bvalid <= 1'b0;
@@ -320,7 +348,9 @@ endmodule
 
 `include "soc_pkg.vh"
 
-module axi_read_fsm (
+module axi_read_fsm #(
+    parameter EXT_RAM_TIMEOUT = 1024     // A2: chu kỳ chờ ext_ram_rd_done tối đa
+) (
 
     input wire clk,
     input wire rst_n,
@@ -378,6 +408,11 @@ module axi_read_fsm (
     reg        saved_ext_ram_sel;   // latched with the AR handshake
     reg        ext_ram_rd_err;      // rejected RAM read (no memory request)
     reg [31:0] ext_ram_rdata_q;     // RAM data captured at ext_ram_rd_done
+    reg [15:0] rd_wait;             // A2: cycles waiting for ext_ram_rd_done
+    reg        ext_ram_rd_tmo;      // A2: this read timed out
+
+    wire saved_none = !(saved_timer_sel || saved_interrupt_sel || saved_fir_sel || saved_ext_ram_sel);
+    wire rd_timeout = ext_ram_rd_req && !ext_ram_rd_done && (rd_wait == EXT_RAM_TIMEOUT - 1);
 
     wire mmio_rd_bad = (saved_timer_sel || saved_interrupt_sel || saved_fir_sel) &&
                        (saved_araddr[1:0] != 2'b00);
@@ -409,7 +444,7 @@ module axi_read_fsm (
                 next_state = READ_WAIT;
             READ_WAIT:
                 // RAM: stay until its own completion for this request
-                if (!saved_ext_ram_sel || ext_ram_rd_err || ext_ram_rd_done)
+                if (!saved_ext_ram_sel || ext_ram_rd_err || ext_ram_rd_done || rd_timeout)
                     next_state = READ_RESP;
             READ_RESP:
                 if (s_axi_rvalid && s_axi_rready)
@@ -439,6 +474,8 @@ module axi_read_fsm (
             ext_ram_rd_req  <= 1'b0;
             ext_ram_rd_addr <= 32'd0;
             ext_ram_rdata_q <= 32'd0;
+            rd_wait         <= 16'd0;
+            ext_ram_rd_tmo  <= 1'b0;
         end
 
         else begin
@@ -462,7 +499,9 @@ module axi_read_fsm (
                 end
 
                 READ_DATA: begin
-                    read_addr     <= saved_araddr;
+                    read_addr      <= saved_araddr;
+                    rd_wait        <= 16'd0;
+                    ext_ram_rd_tmo <= 1'b0;
                     if (saved_timer_sel && !mmio_rd_bad)
                         timer_rd_en <= 1'b1;
                     else if (saved_interrupt_sel && !mmio_rd_bad)
@@ -489,6 +528,13 @@ module axi_read_fsm (
                         ext_ram_rd_req  <= 1'b0;
                         ext_ram_rdata_q <= ext_ram_rdata;   // valid only this cycle (cache mode)
                     end
+                    else if (rd_timeout) begin
+                        // A2: backend did not answer -> give up, SLVERR, RDATA 0
+                        ext_ram_rd_req  <= 1'b0;
+                        ext_ram_rd_tmo  <= 1'b1;
+                    end
+                    else if (ext_ram_rd_req)
+                        rd_wait <= rd_wait + 16'd1;
                 end
 
                 READ_RESP: begin
@@ -502,12 +548,13 @@ module axi_read_fsm (
                         else if (saved_fir_sel)
                             s_axi_rdata <= fir_rdata;
                         else if (saved_ext_ram_sel)
-                            s_axi_rdata <= ext_ram_rd_err ? 32'd0 : ext_ram_rdata_q;
+                            s_axi_rdata <= (ext_ram_rd_err || ext_ram_rd_tmo) ? 32'd0 : ext_ram_rdata_q;
                         else
                             s_axi_rdata <= 32'd0;     // unmapped address reads 0
                         s_axi_rvalid <= 1'b1;
-                        s_axi_rresp  <= (mmio_rd_bad || (saved_ext_ram_sel && ext_ram_rd_err)) ? `AXI_RESP_SLVERR
-                                                                               : `AXI_RESP_OKAY;
+                        s_axi_rresp  <= saved_none ? `AXI_RESP_DECERR :
+                                        (mmio_rd_bad || (saved_ext_ram_sel && (ext_ram_rd_err || ext_ram_rd_tmo)))
+                                            ? `AXI_RESP_SLVERR : `AXI_RESP_OKAY;
                     end
                     else if (s_axi_rready) begin
                         s_axi_rvalid <= 1'b0;
@@ -536,6 +583,10 @@ endmodule
 //     or stale mem_ready (nothing granted) is never reported as completion.
 //   The requesting FSM clears its *_req on the same edge as active returns
 //   to ARB_NONE, so the request is not granted twice.
+//   A2: address/data are latched at grant (a later request cannot change them
+//   under an in-flight backend operation). If the FSM drops its request before
+//   mem_ready (timeout), the grant becomes an orphan: the backend request stays
+//   held until mem_ready, which is then swallowed (no wr_done/rd_done).
 //--------------------------------------------------------------------------
 
 module axi_ext_ram_arbiter (
@@ -567,30 +618,48 @@ module axi_ext_ram_arbiter (
     localparam [1:0] ARB_WR   = 2'd1;
     localparam [1:0] ARB_RD   = 2'd2;
 
-    reg [1:0] active;
+    reg [1:0]  active;
+    reg        orphan;              // A2: requester gave up (timeout)
+    reg [31:0] addr_q, wdata_q;     // A2: latched at grant
+
+    wire       cur_req = (active == ARB_WR) ? wr_req : (active == ARB_RD) ? rd_req : 1'b0;
 
     assign mem_write = (active == ARB_WR) && !mem_ready;
     assign mem_read  = (active == ARB_RD) && !mem_ready;
-    assign mem_addr  = (active == ARB_RD) ? rd_addr : wr_addr;
-    assign mem_wdata = wr_data;
+    assign mem_addr  = addr_q;
+    assign mem_wdata = wdata_q;
 
-    assign wr_done   = (active == ARB_WR) && mem_ready;
-    assign rd_done   = (active == ARB_RD) && mem_ready;
+    assign wr_done   = (active == ARB_WR) && mem_ready && wr_req && !orphan;
+    assign rd_done   = (active == ARB_RD) && mem_ready && rd_req && !orphan;
 
     always @(posedge clk or negedge rst_n) begin
-        if (!rst_n)
-            active <= ARB_NONE;
-        else begin
+        if (!rst_n) begin
+            active  <= ARB_NONE;
+            orphan  <= 1'b0;
+            addr_q  <= 32'd0;
+            wdata_q <= 32'd0;
+        end else begin
             case (active)
-                ARB_NONE:
-                    if (wr_req)
-                        active <= ARB_WR;
-                    else if (rd_req)
-                        active <= ARB_RD;
+                ARB_NONE: begin
+                    orphan <= 1'b0;
+                    if (wr_req) begin
+                        active  <= ARB_WR;
+                        addr_q  <= wr_addr;
+                        wdata_q <= wr_data;
+                    end
+                    else if (rd_req) begin
+                        active  <= ARB_RD;
+                        addr_q  <= rd_addr;
+                    end
+                end
                 ARB_WR,
                 ARB_RD:
-                    if (mem_ready)
+                    if (mem_ready) begin
                         active <= ARB_NONE;
+                        orphan <= 1'b0;
+                    end
+                    else if (!cur_req)
+                        orphan <= 1'b1;
                 default:
                     active <= ARB_NONE;
             endcase
@@ -606,7 +675,8 @@ endmodule
 `include "soc_pkg.vh"
 
 module axi_interconnect #(
-    parameter ENABLE_EXT_RAM = 0
+    parameter ENABLE_EXT_RAM  = 0,
+    parameter EXT_RAM_TIMEOUT = 1024     // A2: max cycles waiting for the external RAM
 ) (
 
     input wire clk,
@@ -693,7 +763,9 @@ module axi_interconnect #(
         .slave_id      ()                 // not used
     );
 
-    axi_write_fsm WRITE_FSM (
+    axi_write_fsm #(
+        .EXT_RAM_TIMEOUT (EXT_RAM_TIMEOUT)
+    ) WRITE_FSM (
         .clk             (clk),
         .rst_n           (rst_n),
         .s_axi_awaddr    (s_axi_awaddr),
@@ -721,7 +793,9 @@ module axi_interconnect #(
         .ext_ram_wr_done (ext_ram_wr_done)
     );
 
-    axi_read_fsm READ_FSM (
+    axi_read_fsm #(
+        .EXT_RAM_TIMEOUT (EXT_RAM_TIMEOUT)
+    ) READ_FSM (
         .clk             (clk),
         .rst_n           (rst_n),
         .s_axi_araddr    (s_axi_araddr),

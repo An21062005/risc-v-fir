@@ -2,6 +2,13 @@
 
 // Bản sao từ tiny-riscv-soc (MIT). Thay đổi: ST_IDLE chỉ nhận yêu cầu khi
 // !mem_ready (chống gửi trùng giao dịch), xem chú thích BUGFIX bên dưới.
+// A1 (2026-10-21): kiểm BRESP/RRESP. RRESP != OKAY -> mem_rdata = 0 (không đưa
+//   RDATA của giao dịch lỗi vào CPU). Mọi lỗi: mem_err = 1 cùng chu kỳ mem_ready;
+//   lỗi ĐẦU TIÊN chốt vào err_valid/err_write/err_resp/err_addr (giữ tới err_clr),
+//   lỗi tiếp theo khi err_valid = 1 chỉ bật err_overflow. CPU không có trap/CSR:
+//   phần mềm đọc trạng thái qua thanh ghi BUSERR (interrupt_axi_wrapper).
+//   Không có timeout ở master: bỏ VALID trước handshake là vi phạm AXI; thời
+//   gian chờ được chặn ở phía slave (axi_interconnect, A2).
 `include "soc_pkg.vh"
 
 module cpu_axi_master (
@@ -21,6 +28,18 @@ module cpu_axi_master (
 
     output reg [31:0] mem_rdata,
     output reg        mem_ready,
+    output reg        mem_err,        // A1: 1 cùng chu kỳ mem_ready nếu BRESP/RRESP != OKAY
+
+    //---------------------------------------------------------
+    // A1: bus error capture (first error, sticky until err_clr)
+    //---------------------------------------------------------
+
+    input  wire       err_clr,
+    output reg        err_valid,
+    output reg        err_write,
+    output reg [1:0]  err_resp,
+    output reg [31:0] err_addr,
+    output reg        err_overflow,
 
     //---------------------------------------------------------
     // AXI Write Address Channel
@@ -115,6 +134,13 @@ module cpu_axi_master (
 
             mem_rdata     <= 32'd0;
             mem_ready     <= 1'b0;
+            mem_err       <= 1'b0;
+
+            err_valid     <= 1'b0;
+            err_write     <= 1'b0;
+            err_resp      <= 2'b00;
+            err_addr      <= 32'd0;
+            err_overflow  <= 1'b0;
 
         end
 
@@ -125,6 +151,12 @@ module cpu_axi_master (
             //-------------------------------------------------
 
             mem_ready <= 1'b0;
+            mem_err   <= 1'b0;
+
+            if (err_clr) begin
+                err_valid    <= 1'b0;
+                err_overflow <= 1'b0;
+            end
 
             //-------------------------------------------------
             // FSM
@@ -263,6 +295,18 @@ module cpu_axi_master (
 
                         mem_ready <= 1'b1;
 
+                        if (M_AXI_BRESP != 2'b00) begin
+                            mem_err <= 1'b1;
+                            if (err_valid && !err_clr)
+                                err_overflow <= 1'b1;
+                            else begin
+                                err_valid <= 1'b1;
+                                err_write <= 1'b1;
+                                err_resp  <= M_AXI_BRESP;
+                                err_addr  <= saved_addr;
+                            end
+                        end
+
                         state <= ST_IDLE;
 
                     end
@@ -306,7 +350,20 @@ module cpu_axi_master (
 
                     if (M_AXI_RVALID && M_AXI_RREADY) begin
 
-                        mem_rdata <= M_AXI_RDATA;
+                        // A1: payload of a failed read is never forwarded
+                        mem_rdata <= (M_AXI_RRESP == 2'b00) ? M_AXI_RDATA : 32'd0;
+
+                        if (M_AXI_RRESP != 2'b00) begin
+                            mem_err <= 1'b1;
+                            if (err_valid && !err_clr)
+                                err_overflow <= 1'b1;
+                            else begin
+                                err_valid <= 1'b1;
+                                err_write <= 1'b0;
+                                err_resp  <= M_AXI_RRESP;
+                                err_addr  <= saved_addr;
+                            end
+                        end
 
                         M_AXI_RREADY <= 1'b0;
 

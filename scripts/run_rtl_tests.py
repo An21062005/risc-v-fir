@@ -8,6 +8,8 @@ All generated files live in --output (default: <project>/outfeed):
 --rtl-root allows running the same regression against a saved RTL baseline.
 
 Optional (not part of the default regression, run by name):
+Default list also includes tb_irq_i1 and tb_cpu_irq_c4_a/_b/_c (I1/C4); the latter
+assemble tb/asm/irq_dir.S with the RISC-V GCC next to Vivado (<vivado>/../gnu/riscv/nt/bin).
   --tests tb_cpu_firmware   build firmware/ with GCC (scripts/build_firmware.py),
                             copy firmware/build/program.mem + data.mem into
                             outfeed/tb_cpu_firmware/ and run the C firmware on the CPU.
@@ -21,6 +23,16 @@ Optional (not part of the default regression, run by name):
   --tests tb_cpu_ext_ram_b tb_cpu_ext_ram_c
                             firmware/ext_ram_test.c: CPU lw/sw on the 64 KB external
                             RAM (soc_top ENABLE_EXT_RAM=1, B = no cache, C = cache).
+  --tests tb_cpu_timer_irq_a tb_cpu_timer_irq_b tb_cpu_timer_irq_c
+                            firmware/timer_irq_test.c: Timer periodic 10 kHz -> IRQ -> ISR
+                            (vector 0x10) -> ACK -> mret; A = no ext RAM, B/C = ext RAM.
+  --tests tb_cpu_fir_timer tb_cpu_fir_timer_stress
+                            firmware/fir_timer.c: Timer IRQ 10 kHz paces 32 FIR samples, FIR IRQ
+                            returns results (stress: PERIOD 100, deliberate overload).
+  --tests tb_cpu_fir_timer_1000_b tb_cpu_fir_timer_1000_c
+                            firmware/fir_timer_1000.c: Timer IRQ 10 kHz paces 1000 samples from the
+                            external RAM, FIR IRQ stores results back (B = no cache, C = cache).
+                            ~10 M cycles each.
   --tests tb_cpu_fir_1000 tb_cpu_fir_1000_c
                             firmware/fir_1000.c: 1000 samples external RAM -> FIR ->
                             external RAM; data from data_test/fir_1000/ (generate with
@@ -28,12 +40,38 @@ Optional (not part of the default regression, run by name):
 """
 
 import argparse
+import hashlib
+import json
 import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
 import sys
+
+
+def assemble_irq_images(toolchain, source, directory):
+    """tb_cpu_irq_c4: assemble tb/asm/irq_dir.S variants into <directory>/<name>.mem (256 words)."""
+    prefix = "riscv64-unknown-elf-"
+    tool = lambda name: str(toolchain / (prefix + name)) if toolchain.is_dir() else prefix + name
+    variants = []
+    for n in range(7):
+        variants += [(f"c4a_{n}", 0, n, 2, []), (f"c4b_{n}", 1, n, 3, []),
+                     (f"c4p_{n}", 0, n, 2, ["-DLOOPPAD=24"])]
+    variants += [(f"i1_{n}", 2, n, 2, []) for n in (0, 2, 4, 6, 8, 10, 12, 14, 16, 20, 24)]
+    for name, mode, nops, enable, extra in variants:
+        elf, binary = directory / f"{name}.elf", directory / f"{name}.bin"
+        subprocess.run([tool("gcc"), "-march=rv32i", "-mabi=ilp32", "-nostdlib", "-nostartfiles",
+                        "-Wl,-Ttext=0", "-Wl,--no-relax", f"-DMODE={mode}", f"-DNOPS={nops}",
+                        f"-DENABLE={enable}", *extra, str(source), "-o", str(elf)], check=True)
+        subprocess.run([tool("objcopy"), "-O", "binary", "-j", ".text", str(elf), str(binary)], check=True)
+        data = binary.read_bytes()
+        data += bytes(-len(data) % 4)
+        words = [int.from_bytes(data[i:i + 4], "little") for i in range(0, len(data), 4)]
+        if len(words) > 256:
+            raise RuntimeError(f"{name}: {len(words)} words > 256-word IMEM")
+        words += [0x13] * (256 - len(words))
+        (directory / f"{name}.mem").write_text("".join(f"{w:08x}\n" for w in words), encoding="ascii")
 
 
 def main():
@@ -66,6 +104,8 @@ def main():
     parser.add_argument("--open-wave", metavar="TEST",
                         help="open <output>/TEST/TEST.wdb in the XSim GUI and exit "
                              "(run once with --wave first)")
+    parser.add_argument("--fir-matrix", action="store_true", help="all six Timer/FIR datasets in B and C")
+    parser.add_argument("--firmware-src", type=Path, help="alternate firmware sources for reproducible mutation tests")
     args = parser.parse_args()
     if args.vivado_root is None:
         parser.error("Pass --vivado-root or set XILINX_VIVADO")
@@ -167,11 +207,24 @@ def main():
         ("tb_fir11_wrapper", []),
         ("tb_fir11_vectors", []),
         ("tb_axi_fir", []),
+        ("tb_axi_fault", []),        # A1/A2: DECERR/SLVERR, ext-RAM timeout, backpressure
         ("tb_ext_ram_cfgA", []),
         ("tb_ext_ram_axi_b", ["USE_CACHE=0"]),
         ("tb_ext_ram_axi_c", ["USE_CACHE=1"]),
         ("tb_cpu_bus_b", ["USE_CACHE=0"]),
         ("tb_cpu_bus_c", ["USE_CACHE=1"]),
+        ("tb_timer", []),
+        ("tb_irq_ack", []),
+        ("tb_cpu_fault_b", ["USE_CACHE=0"]),
+        ("tb_cpu_fault_c", ["USE_CACHE=1"]),
+        ("tb_id_ex_reg", []),
+        ("tb_cpu_flush_hold_b", ["USE_CACHE=0"]),
+        ("tb_cpu_flush_hold_c", ["USE_CACHE=1"]),
+        # I1/C4: FIR IRQ vs late ACK, ACK right before mret (tb/asm/irq_dir.S images)
+        ("tb_irq_i1", []),
+        ("tb_cpu_irq_c4_a", ["EXT_RAM=0"]),
+        ("tb_cpu_irq_c4_b", ["EXT_RAM=1", "USE_CACHE=0"]),
+        ("tb_cpu_irq_c4_c", ["EXT_RAM=1", "USE_CACHE=1"]),
     ]
     default_tests = [name for name, _ in tests]
     # Optional: needs the RISC-V GCC toolchain, so it only runs when named.
@@ -201,9 +254,52 @@ def main():
         "tb_cpu_fir_1000_c": firmware_test("fir_1000", fw_build / "fir_1000",
                                            images + ("symbols.mem",), "tb_cpu_fir_1000",
                                            ["USE_CACHE=1"], fir_1000_data, 1800),
+        # Timer IRQ: firmware/timer_irq_test.c (startup_irq.S, vector 0x10, ISR, ACK, mret)
+        "tb_cpu_timer_irq_a": firmware_test("timer_irq_test", fw_build / "timer_irq_test",
+                                            images + ("symbols.mem",), "tb_cpu_timer_irq",
+                                            ["EXT_RAM=0"]),
+        "tb_cpu_timer_irq_b": firmware_test("timer_irq_test", fw_build / "timer_irq_test",
+                                            images + ("symbols.mem",), "tb_cpu_timer_irq",
+                                            ["EXT_RAM=1", "USE_CACHE=0"]),
+        "tb_cpu_timer_irq_c": firmware_test("timer_irq_test", fw_build / "timer_irq_test",
+                                            images + ("symbols.mem",), "tb_cpu_timer_irq",
+                                            ["EXT_RAM=1", "USE_CACHE=1"]),
+        # Giai đoạn 3: Timer IRQ 10 kHz -> 32 mẫu FIR, FIR IRQ (firmware/fir_timer.c);
+        # _stress: PERIOD 100 clock, cố ý quá tải (tick gộp, trễ, Timer+FIR cùng pending)
+        "tb_cpu_fir_timer": firmware_test("fir_timer", fw_build / "fir_timer",
+                                          images + ("symbols.mem",), "tb_cpu_fir_timer",
+                                          ["PERIOD=10000", "STRESS=0"]),
+        "tb_cpu_fir_timer_stress": firmware_test("fir_timer_stress", fw_build / "fir_timer_stress",
+                                                 images + ("symbols.mem",), "tb_cpu_fir_timer",
+                                                 ["PERIOD=100", "STRESS=1"]),
+        # Giai đoạn 4: Timer IRQ 10 kHz -> 1000 mẫu RAM ngoài -> FIR IRQ -> RAM ngoài (~10 M chu kỳ)
+        "tb_cpu_fir_timer_1000_b": firmware_test("fir_timer_1000", fw_build / "fir_timer_1000",
+                                                 images + ("symbols.mem",), "tb_cpu_fir_timer_1000",
+                                                 ["USE_CACHE=0"], fir_1000_data, 3600),
+        "tb_cpu_fir_timer_1000_c": firmware_test("fir_timer_1000", fw_build / "fir_timer_1000",
+                                                 images + ("symbols.mem",), "tb_cpu_fir_timer_1000",
+                                                 ["USE_CACHE=1"], fir_1000_data, 3600),
     }
+    for cache, label in ((0, "b"), (1, "c")):
+        base = firmware_tests[f"tb_cpu_fir_timer_1000_{label}"]
+        for dataset in vector_tests:
+            cfg = dict(base, dataset=dataset)
+            firmware_tests[f"tb_cpu_fir_timer_1000_{label}_{dataset}"] = cfg
+        firmware_tests[f"tb_cpu_fir_timer_1000_stress_{label}"] = dict(base,
+            fw="fir_timer_1000_stress", generics=[f"USE_CACHE={cache}", "PERIOD=100", "STRESS=1"])
+        firmware_tests[f"tb_cpu_fir_timer_1000_timing_fault_{label}"] = dict(base,
+            generics=[f"USE_CACHE={cache}", "ACCEPT_HOLD=400"])
+        firmware_tests[f"tb_cpu_fir_timer_1000_jitter_fault_{label}"] = dict(base,
+            generics=[f"USE_CACHE={cache}", "ACCEPT_HOLD=200"])
+        firmware_tests[f"tb_cpu_fir_timer_1000_reset_{label}"] = dict(base,
+            generics=[f"USE_CACHE={cache}", "RESET_TEST=1"])
+        firmware_tests[f"tb_cpu_fir_timer_1000_late_{label}"] = dict(base,
+            generics=[f"USE_CACHE={cache}", "LATE_LAST=1"])
     tests += [(name, cfg["generics"]) for name, cfg in firmware_tests.items()]
-    selected = args.tests or default_tests
+    selected = args.tests or ([] if args.fir_matrix else default_tests)
+    if args.fir_matrix:
+        selected += [f"tb_cpu_fir_timer_1000_{label}_{dataset}"
+                     for dataset in vector_tests for label in ("b", "c")]
     unknown = set(selected) - {name for name, _ in tests}
     if unknown:
         parser.error(f"Unknown tests: {sorted(unknown)}")
@@ -211,17 +307,25 @@ def main():
         if name not in selected:
             continue
         top = ((firmware_tests[name]["top"] or name) if name in firmware_tests else
+               "tb_cpu_fault" if name.startswith("tb_cpu_fault_") else
+               "tb_cpu_flush_hold" if name.startswith("tb_cpu_flush_hold_") else
                "tb_cpu_bus" if name.startswith("tb_cpu_bus_") else
+               "tb_cpu_irq_c4" if name.startswith("tb_cpu_irq_c4_") else
                "tb_ext_ram_axi" if generics else name)
         directory = output / name
         directory.mkdir(parents=True, exist_ok=True)
         for data in (rtl / "Peripherals/FIR11").glob("*.dat"):
             shutil.copy2(data, directory / data.name)
-        if top == "tb_cpu_bus":
+        if top in ("tb_cpu_bus", "tb_cpu_fault", "tb_cpu_flush_hold"):
             # Empty memory fixtures for the CPU's readmemh; the testbench
             # installs directed instructions after time-zero initialization.
             (directory / "program.mem").write_text("00000013\n" * 256, encoding="ascii")
             (directory / "data.mem").write_text("00000000\n" * 256, encoding="ascii")
+        if top == "tb_cpu_irq_c4":
+            (directory / "program.mem").write_text("00000013\n" * 256, encoding="ascii")
+            (directory / "data.mem").write_text("00000000\n" * 256, encoding="ascii")
+            assemble_irq_images(vivado.parent / "gnu" / "riscv" / "nt" / "bin",
+                                project / "tb" / "asm" / "irq_dir.S", directory)
         sim_timeout = 180
         if name in firmware_tests:
             # GCC image, never the NOP fixtures above. Build first so the image
@@ -229,7 +333,24 @@ def main():
             cfg = firmware_tests[name]
             firmware, firmware_build, firmware_files = cfg["fw"], cfg["build"], cfg["files"]
             sim_timeout = cfg["timeout"]
-            for data in cfg["data"]:
+            source_dir = args.firmware_src
+            if top == "tb_cpu_fir_timer_1000":
+                if args.no_firmware_build:
+                    raise RuntimeError("Timer/FIR 1000 requires rebuild with its run-specific dataset header")
+                # Generate all fixtures AND the firmware header together in this run directory.
+                # Never reuse a tracked noise checksum with a different input or expected file.
+                from gen_fir_1000_data import build as build_vectors
+                files, _, _ = build_vectors(cfg.get("dataset", "test_04_noise"))
+                source_dir = directory / "firmware_src"
+                source_dir.mkdir(exist_ok=True)
+                for source in (args.firmware_src or project / "firmware").iterdir():
+                    if source.suffix in (".c", ".h", ".S", ".ld"):
+                        shutil.copy2(source, source_dir / source.name)
+                for filename, contents in files.items():
+                    target = source_dir / filename if filename.endswith(".h") else directory / filename
+                    target.write_text(contents, encoding="utf-8", newline="\n")
+                firmware_build = directory / "firmware_build"
+            for data in ([] if top == "tb_cpu_fir_timer_1000" else cfg["data"]):
                 if not data.is_file():
                     raise RuntimeError(f"{data} missing; run scripts/gen_fir_1000_data.py")
                 shutil.copy2(data, directory / data.name)
@@ -237,6 +358,8 @@ def main():
                 toolchain = vivado.parent / "gnu" / "riscv" / "nt" / "bin"
                 command = [sys.executable, str(project / "scripts" / "build_firmware.py"),
                            "--firmware", firmware, "--out", str(firmware_build)]
+                if source_dir:
+                    command += ["--src", str(source_dir)]
                 if toolchain.is_dir():
                     command += ["--toolchain", str(toolchain)]
                 print("Building firmware", flush=True)
@@ -246,6 +369,15 @@ def main():
                 if not (firmware_build / image).is_file():
                     raise RuntimeError(f"{firmware_build / image} missing; run scripts/build_firmware.py")
                 shutil.copy2(firmware_build / image, directory / image)
+        artifacts = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+                     for p in directory.glob("*.mem")}
+        source_hashes = {str(p): hashlib.sha256(p.read_bytes()).hexdigest()
+                         for p in [project / "tb" / (top + ".v"), *sources]}
+        if name in firmware_tests and source_dir:
+            source_hashes.update({"firmware/" + p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+                for p in source_dir.iterdir() if p.suffix in (".c", ".h", ".S", ".ld")})
+        (directory / "provenance.json").write_text(json.dumps(dict(test=name, top=top,
+            generics=generics, seed=args.seed, artifacts=artifacts, sources=source_hashes), indent=2), encoding="utf-8")
         plusargs = [f"seed={args.seed}"]
         if top == "tb_fir11_vectors":
             # Reference vectors are read in place; actual.dat goes to <outfeed>/<test>/.

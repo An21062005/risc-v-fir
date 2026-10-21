@@ -150,3 +150,109 @@ python scripts/run_rtl_tests.py --vivado-root D:/vivado/2026.1/Vivado --tests \
 - No FPGA synthesis, implementation, reset synchronizer or physical SDRAM PHY
   verification was performed. Passing these simulations is not whole-system
   hardware sign-off.
+
+## Timer periodic 10 kHz + CPU Timer IRQ (Giai đoạn 1–2) — 2026-10-18
+
+Scope: Timer periodic mode and a dedicated IRQ firmware. FIR HLS RTL, FIR wrapper,
+FIR firmware, CPU pipeline, interrupt controller, `startup.S`/`linker.ld` unchanged.
+
+Timer (`rtl/Peripherals/timer.v`, bus 0x080 / CPU 0x4000_0080) now decodes `addr[5:2]`:
+
+| Offset | Register | Behaviour |
+|---|---|---|
+| 0x00 | LEGACY | Original one-shot, bit-exact (0x10–0x3C stay aliases, as before) |
+| 0x04 | PERIOD | Clocks per tick; < 2 is invalid (no ticks) |
+| 0x08 | CTRL | bit0 ENABLE, bit1 PERIODIC (0 = one tick then ENABLE clears), bit2 PERIOD_INVALID (RO) |
+| 0x0C | TICK_COUNT | RO, ticks since reset |
+
+First tick exactly PERIOD clocks after the edge that sets ENABLE 0→1; then every
+PERIOD clocks; 1-cycle pulse; TICK_COUNT +1 per tick. Rewriting CTRL with ENABLE=1
+keeps the phase; ENABLE=0 wins over a coincident tick. ACK is in the interrupt
+controller and never touches the Timer. `irq = legacy | tick` (do not use both modes
+at once: adjacent pulses merge into one edge).
+
+IRQ firmware: `firmware/timer_irq_test.c` + `startup_irq.S` (vector 0x10, saves the 16
+caller-saved registers, calls C `timer_isr`, `mret`) + `linker_irq.ld`. IMEM 1004/1024 B.
+`build_firmware.py` allows `mret` only for this firmware and only at `__trap_mret`.
+
+| Test | Checks | Result | Notes |
+|---|---:|---|---|
+| `tb_timer` | 2013 | PASS | LEGACY compared every cycle with the original `timer.v` (commit f748661); periodic vs independent model; 407,639 cycles, 0 mismatches. PERIOD=10000: first IRQ 10000 clk, interval 10000/10000 |
+| `tb_cpu_timer_irq_a` / `_b` / `_c` | 58 / 59 / 59 | PASS | 9 ticks (interval 10000), 7 pending events + 2 coalesced, 7 irq_take = 7 STATUS reads = 7 ACK = 7 mret = irq_count, 0 spurious; registers checked after 4 returns into the test loop + exit; IRQs during AXI stall serviced (B max 19, C 22 clocks) |
+
+Mutation checks (scratch copies): `tb_timer` caught 6/6 Timer faults; `tb_cpu_timer_irq`
+caught no-ACK, wrong ACK id, ISR clobbering s2, missing a5 restore, Timer off-by-one and
+wrong `mepc`. Not restoring t3 is undetectable (equivalent: `timer_isr` never uses t3).
+
+Full regression after the change: 19 configurations PASS (the 15 pre-existing ones with
+the same check counts and cycles to HALT as before). Questa `vlog -lint`: 0/0.
+
+```text
+python scripts/run_rtl_tests.py --vivado-root D:/vivado/2026.1/Vivado --tests tb_timer     tb_cpu_timer_irq_a tb_cpu_timer_irq_b tb_cpu_timer_irq_c
+```
+
+Limits: one interrupt level, no nesting (CPU `in_irq`); ISR shares the main stack; no CSRs,
+so no `mcause` — the ISR identifies the source through the controller STATUS register.
+
+## Giai đoạn 3: Timer IRQ 10 kHz điều phối 32 mẫu FIR, FIR IRQ — 2026-10-18
+
+No RTL change. New: `firmware/fir_timer.c`, `tb/tb_cpu_fir_timer.v`. `startup_irq.S` gained
+`IRQ_C_HANDLER` / `REGTEST_COUNTER` / `REGTEST_NO_EXT_RAM` macros (defaults keep
+`timer_irq_test` binary-identical, verified by comparing program.mem); `build_firmware.py` passes
+per-firmware `defines`. `fir_stream.c` (polling) unchanged.
+
+Flow: tick → Timer ISR (ACK = STATUS, read TICK_COUNT, stop Timer at 32, send sample if due and
+FIR idle) → FIR DONE → FIR ISR (ACK = STATUS first, read DATA_OUT once, store, send next due
+sample). Main: 10-zero flush (polling, IRQs off), ACK flush pending, start, wait in the
+register-pattern loop. IMEM 1012/1024 B (stress build 996 B), DMEM 296 B + 256 B stack.
+
+| Test | Checks | Result | Measured |
+|---|---:|---|---|
+| `tb_cpu_fir_timer` (PERIOD 10000) | 63 | PASS | 32 ticks, interval 10000/10000; 64 ISRs (32 Timer + 32 FIR), 65 ACK (+1 main flush); 32/32 outputs bit-exact vs Verilog model; tick→DATA_IN accept 109–116 clk (jitter 7 clk = 70 ns), accept interval 9993–10007 clk, accept→FIR done 17 clk, tick→stored ≤ 206 clk; 0 missed, 0 coalesced, backlog 1, 0 BUSY write, 0 OVERRUN |
+| `tb_cpu_fir_timer_stress` (PERIOD 100, overload) | 60 | PASS | 32 ticks, 4 coalesced (TB = firmware), 28 Timer + 32 FIR ISRs, Timer+FIR pending together 1739 cycles, 31 missed (TB = firmware), backlog 32; still 32/32 correct, in order, no BUSY/OVERRUN |
+
+Fault injection (scratch copies, checker unchanged) — all detected: wrong stored output, missing
+sample, duplicated sample, ACK of the wrong source, late ACK (FIR IRQ lost/ordering), sending while
+BUSY, coalesced ticks / deadline misses under normal-mode expectations, deliberate 10 kHz deadline
+miss, ISR corrupting t3, RTL hiding one FIR IRQ edge.
+
+Full regression: 21 configurations PASS (pre-existing ones with unchanged check counts and cycles).
+Questa `vlog -lint`: 0/0. IMEM is the binding limit (98.8 %); the 1000-sample stage needs either a
+smaller image or a larger IMEM (not changed here).
+
+## Giai đoạn 4: Timer IRQ 10 kHz, 1000 mẫu từ RAM ngoài — 2026-10-18
+
+No RTL change. New: `firmware/fir_timer_isr.h` (ISR moved verbatim out of `fir_timer.c`;
+`fir_timer` / `fir_timer_stress` stay binary-identical, program.mem and data.mem compared),
+`firmware/fir_timer_1000.c` (no register-pattern loop; input/output in external RAM at
+0x4001_0000 / 0x4001_1000, data from `data_test/fir_1000`), `tb/tb_cpu_fir_timer_1000.v`.
+IMEM 824/1024 B, DMEM 40 B + 256 B stack. Context is checked in the testbench: x1..x31 snapshot
+when the first ISR instruction reaches MEM, compared when the mepc instruction reaches MEM.
+
+| Measurement | B (no cache) | C (cache) |
+|---|---:|---:|
+| Checks / errors | 76 / 0 | 76 / 0 |
+| Ticks (interval) | 1000 (10000/10000) | 1000 (10000/10000) |
+| IRQs taken (Timer + FIR), ACK | 2000 (1000+1000), 2001 | 2000 (1000+1000), 2001 |
+| Output in sdram_model == reference | 1000/1000 | 1000/1000 |
+| Tick → ISR entry min/avg/max | 2/2/5 | 2/2/5 |
+| Tick → FIR accepts DATA_IN min/avg/max | 132/132/139 | 118/136/207 |
+| Jitter of DATA_IN accept | 7 clk (70 ns) | 89 clk (890 ns) |
+| DATA_IN accept interval | 9998–10006 | 9912–10089 |
+| FIR latency (accept → ap_done) | 17 | 17 |
+| Tick → output stored (AXI B) min/avg/max | 242/243/262 | 231/249/320 |
+| Longest RAM transaction | 42 | 99 |
+| Deadline miss / coalesced / max backlog | 0 / 0 / 1 | 0 / 0 / 1 |
+| BUSY writes / OVERRUN | 0 / 0 | 0 / 0 |
+| CPU bus transactions (MMIO + RAM) | 11048 (8048 + 3000) | 11048 (8048 + 3000) |
+| Cycles to HALT | 10,032,106 | 10,035,454 |
+
+Fault injection (config B, checker unchanged) — all detected: ISR corrupting t3, skipped sample,
+wrong stored output, ACK of the wrong source, RTL hiding one FIR IRQ (progress watchdog stops the run
+at cycle 3.03 M instead of timing out at 10 M), one-bit RAM read-data and write-data corruption in
+the interconnect. Full regression: 23 configurations PASS; Questa `vlog -lint` 0/0.
+
+## Giai đoạn 4.1 — 2026-10-21
+
+Xem [báo cáo verification Giai đoạn 4.1](PHASE41_VERIFICATION.md) cho cơ chế
+deadline mới, 6 dataset × B/C, reset, IRQ/ACK, overload, fault injection và regression.

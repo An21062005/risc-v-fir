@@ -104,7 +104,9 @@ module tb_ext_ram_axi;
         .wr_en(interrupt_wr_en), .rd_en(interrupt_rd_en),
         .wr_addr(write_addr), .rd_addr(read_addr), .wdata(write_data), .rdata(interrupt_rdata),
         .irq_enable(), .ack(), .ack_id(),
-        .pending(2'b00), .interrupt(1'b0), .interrupt_id(3'd0)
+        .pending(2'b00), .interrupt(1'b0), .interrupt_id(3'd0),
+        .buserr_valid(1'b0), .buserr_write(1'b0), .buserr_resp(2'b00), .buserr_overflow(1'b0),
+        .buserr_addr(32'd0), .buserr_clr()
     );
 
     cache_top #(.USE_CACHE(USE_CACHE)) u_mem (

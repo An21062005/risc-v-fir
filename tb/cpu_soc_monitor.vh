@@ -180,7 +180,7 @@
     endtask
 
     always @(posedge clk) begin
-        if (rst_n) begin
+        if (dut.rst_n_sync) begin   // DUT out of reset (S1: 2-cycle synchronizer)
             cycles = cycles + 1;
             for (mon_k = 7; mon_k > 0; mon_k = mon_k - 1) last_pc[mon_k] = last_pc[mon_k-1];
             last_pc[0] = dut.u_cpu.if_id_pc;

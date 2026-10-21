@@ -24,6 +24,7 @@
 
 `define AXI_RESP_OKAY    2'b00
 `define AXI_RESP_SLVERR  2'b10
+`define AXI_RESP_DECERR  2'b11   // A1: địa chỉ không map
 
 //---------------------------------------------------------
 // Peripheral Select Encoding (slave_id of axi_address_decoder)
@@ -50,6 +51,14 @@
 // TIMER
 `define TIMER_BASE       32'h0000_0080
 `define TIMER_END        32'h0000_00BF
+// Timer registers (offset, addr[5:2]; see rtl/Peripherals/timer.v)
+//   0x00 LEGACY one-shot (unchanged; 0x10-0x3C remain aliases of LEGACY)
+//   0x04 PERIOD   0x08 CTRL (bit0 ENABLE, bit1 PERIODIC, bit2 PERIOD_INVALID RO)
+//   0x0C TICK_COUNT (RO)
+`define TIMER_LEGACY_REG 8'h00
+`define TIMER_PERIOD_REG 8'h04
+`define TIMER_CTRL_REG   8'h08
+`define TIMER_TICK_REG   8'h0C
 
 // Interrupt Controller
 `define INTERRUPT_BASE   32'h0000_01C0

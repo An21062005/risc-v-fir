@@ -11,6 +11,12 @@ sim_out/
 firmware/build/
 # outfeed/: chỉ giữ kết quả FIR RTL (outfeed/test_*/actual.dat), bỏ file build XSim
 /outfeed/tb_*/
+# Phase 4.1 suite logs, images, baseline copies and local scratch helpers
+/outfeed/phase41*/
+/outfeed/phase41*.patch
+/outfeed/*41.py
+# Phase 5: Vivado synthesis output of scripts/run_vivado_synth.py (default outfeed/synth_<cfg>/)
+/outfeed/synth_*/
 # File phụ của XSim (xvlog.pb, xelab.pb, xsim_*.backup.*) nếu chạy tay ngoài outfeed/
 *.pb
 *.backup.*
@@ -35,6 +41,21 @@ modelsim.ini
 .Xil/
 *.comp/
 webtalk*
+# Vivado checkpoints / reports / batch by-products (fpga/synth_soc.tcl writes them to its out dir)
+*.dcp
+usage_statistics_webtalk.*
+clockInfo.txt
+.hbs/
+*.bit
+*.bin
+*.ltx
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
 
 # Workspace Vitis HLS: chỉ giữ mã nguồn, syn/verilog và syn/report
 .autopilot/

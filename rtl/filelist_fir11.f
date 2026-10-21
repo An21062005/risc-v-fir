@@ -8,6 +8,7 @@
 
 // SoC
 rtl/soc_top.v
+rtl/reset_sync.v
 rtl/cpu_soc.v
 rtl/CPU/cpu.v
 rtl/CPU/Pipeline_Registers.v

@@ -15,8 +15,15 @@
 //                       bit[3:1] = số hiệu nguồn cần xóa (ack_id).
 //                       Đọc ra 0.
 //   0x0C  STATUS  (RO)  bit0 = có ngắt, bit[3:1] = số hiệu ngắt ưu tiên cao nhất
+//   0x10  BUSERR  (R/W1C) A1: lỗi bus đầu tiên (cpu_axi_master): bit0 valid,
+//                       bit1 write, bit[3:2] resp, bit4 overflow; ghi bit0=1 xóa.
+//   0x14  BUSERR_ADDR (RO) địa chỉ bus của lỗi đầu tiên.
 // ACK dùng cùng định dạng với STATUS: ISR đọc STATUS rồi ghi lại đúng giá trị
 // đó vào ACK là xóa đúng nguồn vừa phục vụ.
+// C4 (2026-10-21): ack/ack_id tổ hợp ngay trong chu kỳ wr_en (trước đây chốt
+//   thêm 1 chu kỳ). pending xóa trước khi CPU nhận bus_ready của lệnh sw ACK
+//   -> biên 1 chu kỳ cho `sw ACK; mret` (trước đây 0). Kiểm: tb/tb_cpu_irq_c4.v.
+// status_rd: xung 1 chu kỳ khi đọc STATUS = claim cho interrupt_controller (I1).
 //
 // Giao thức bus (xem chú thích đầu AXI_Interconnect.v):
 //   ghi : wr_en xung 1 chu kỳ, wr_addr/wdata hợp lệ đúng chu kỳ đó
@@ -47,11 +54,23 @@ module interrupt_axi_wrapper (
     //------------------------------------------------------------
 
     output reg  [`NUM_INTERRUPTS-1:0]  irq_enable,
-    output reg                         ack,
-    output reg  [`INT_ID_WIDTH-1:0]    ack_id,
+    output wire                        ack,
+    output wire [`INT_ID_WIDTH-1:0]    ack_id,
+    output wire                        status_rd,   // FIX I1: claim
     input  wire [`NUM_INTERRUPTS-1:0]  pending,
     input  wire                        interrupt,
-    input  wire [`INT_ID_WIDTH-1:0]    interrupt_id
+    input  wire [`INT_ID_WIDTH-1:0]    interrupt_id,
+
+    //------------------------------------------------------------
+    // A1: bus error status (cpu_axi_master)
+    //------------------------------------------------------------
+
+    input  wire                        buserr_valid,
+    input  wire                        buserr_write,
+    input  wire [1:0]                  buserr_resp,
+    input  wire                        buserr_overflow,
+    input  wire [31:0]                 buserr_addr,
+    output wire                        buserr_clr
 
 );
 
@@ -63,6 +82,8 @@ module interrupt_axi_wrapper (
     localparam [3:0] IDX_PENDING = `INT_PENDING_REG >> 2;
     localparam [3:0] IDX_ACK     = `INT_ACK_REG     >> 2;
     localparam [3:0] IDX_STATUS  = `INT_STATUS_REG  >> 2;
+    localparam [3:0] IDX_BUSERR  = `INT_BUSERR_REG  >> 2;
+    localparam [3:0] IDX_BUSERR_ADDR = `INT_BUSERR_ADDR_REG >> 2;
 
     wire [3:0] wr_idx = wr_addr[5:2];
     wire [3:0] rd_idx = rd_addr[5:2];
@@ -84,16 +105,13 @@ module interrupt_axi_wrapper (
     // ACK: self-clearing one-cycle pulse
     //------------------------------------------------------------
 
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            ack    <= 1'b0;
-            ack_id <= {`INT_ID_WIDTH{1'b0}};
-        end else begin
-            ack <= wr_en && (wr_idx == IDX_ACK) && wdata[0];
-            if (wr_en && (wr_idx == IDX_ACK))
-                ack_id <= wdata[`INT_ID_WIDTH:1];
-        end
-    end
+    // FIX C4: same cycle as wr_en (was registered: +1 cycle)
+    assign ack    = wr_en && (wr_idx == IDX_ACK) && wdata[0];
+    assign ack_id = wdata[`INT_ID_WIDTH:1];
+    assign status_rd = rd_en && (rd_idx == IDX_STATUS);
+
+    // A1: W1C clear of the captured bus error
+    assign buserr_clr = wr_en && (wr_idx == IDX_BUSERR) && wdata[0];
 
 
     //------------------------------------------------------------
@@ -108,6 +126,9 @@ module interrupt_axi_wrapper (
             IDX_ENABLE:  rd_mux[`NUM_INTERRUPTS-1:0] = irq_enable;
             IDX_PENDING: rd_mux[`NUM_INTERRUPTS-1:0] = pending;
             IDX_STATUS:  rd_mux[`INT_ID_WIDTH:0]     = {interrupt_id, interrupt};
+            // fields read 0 while no error is captured (after reset / W1C clear)
+            IDX_BUSERR:  rd_mux[4:0] = buserr_valid ? {buserr_overflow, buserr_resp, buserr_write, 1'b1} : 5'd0;
+            IDX_BUSERR_ADDR: rd_mux  = buserr_valid ? buserr_addr : 32'd0;
             default:     rd_mux = 32'd0;           // ACK and unmapped read 0
         endcase
     end

@@ -134,7 +134,7 @@ module tb_cpu_firmware;
     integer    k;
 
     always @(posedge clk) begin
-        if (rst_n) begin
+        if (dut.rst_n_sync) begin   // DUT out of reset (S1: 2-cycle synchronizer)
             cycles = cycles + 1;
             for (k = 7; k > 0; k = k - 1) last_pc[k] = last_pc[k-1];
             last_pc[0] = dut.u_cpu.if_id_pc;

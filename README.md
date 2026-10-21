@@ -90,7 +90,8 @@ python scripts/view_fir_plots.py
 ## Chạy test RTL
 
 ```bash
-# Toàn bộ regression (8 cấu hình)
+# Regression mặc định (20 cấu hình, gồm I1/C4 và AXI fault; danh sách đầy đủ 56 cấu hình:
+# docs/PHASE5_VERIFICATION.md)
 python scripts/run_rtl_tests.py --vivado-root D:/vivado/2026.1/Vivado
 
 # Chỉ một vài test
@@ -113,6 +114,23 @@ nếu tất cả PASS, exit 1 nếu có lỗi.
 | `tb_ext_ram_cfgA` | cấu hình không có RAM ngoài |
 | `tb_ext_ram_axi_b` / `_c` | RAM ngoài, bypass / có cache (random theo seed) |
 | `tb_cpu_bus_b` / `_c` | CPU thật + FIR + IRQ + RAM, bypass / có cache |
+| `tb_axi_fault` | interconnect: DECERR/SLVERR, timeout RAM ngoài, backpressure, scoreboard (A1/A2) |
+| `tb_cpu_fault_b` / `_c` | CPU: SLVERR/DECERR + thanh ghi BUSERR, timeout đọc/ghi, phục hồi |
+| `tb_irq_i1` | FIR IRQ khi gửi DATA_IN trước ACK (I1) |
+| `tb_cpu_irq_c4_a` / `_b` / `_c` | ACK sát MRET, ngắt chen giữa ACK/MRET (C4); ảnh asm từ `tb/asm/irq_dir.S` |
+| `tb_timer`, `tb_irq_ack`, `tb_id_ex_reg`, `tb_cpu_flush_hold_b` / `_c` | Timer, ACK pin-level, ID/EX flush+hold |
+
+Kết quả Phase 5 (56/56 cấu hình, synthesis, timing): [docs/PHASE5_VERIFICATION.md](docs/PHASE5_VERIFICATION.md).
+
+## Synthesis Vivado (không tạo bitstream)
+
+```bash
+# Top soc_top, cấu hình A, firmware fir_timer, clock 100 MHz (fpga/soc_top.xdc), synth + place/route
+python scripts/run_vivado_synth.py --vivado-root D:/vivado/2026.1/Vivado --impl
+```
+
+Kết quả: synthesis PASS, **timing 100 MHz FAIL** (WNS −3,247 ns, Fmax ≈ 75 MHz; 50 MHz đạt).
+`fpga/soc_top.xdc` chỉ có ràng buộc clock, chưa gán chân (board chưa xác định).
 
 Test firmware (tùy chọn, cần GCC RISC-V của Vivado, chỉ chạy khi gọi tên qua `--tests`; mỗi test
 tự build firmware trước khi mô phỏng):

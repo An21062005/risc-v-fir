@@ -20,11 +20,18 @@
 //
 // Reset: ngõ vào rst_n (mức thấp). CPU và interrupt_controller dùng
 //   rst = ~rst_n (mức cao). AXI master, interconnect và các ngoại vi dùng rst_n.
-//   TODO(xác minh): rst_n đưa thẳng vào, chưa có reset synchronizer
-//   (chấp nhận được cho mô phỏng; khi lên FPGA nên thêm).
+//   S1 (2026-10-21): rst_n qua reset_sync (rtl/reset_sync.v): bật bất đồng bộ
+//   (không cần clock), nhả đồng bộ sau 2 cạnh clk. Mọi khối bên trong dùng
+//   rst_n_sync / rst = ~rst_n_sync; chân rst_n chỉ vào reset_sync.
+//
+// Lỗi bus (A1/A2): cpu_axi_master chốt lỗi BRESP/RRESP đầu tiên; phần mềm đọc
+//   qua BUSERR (0x1D0) / BUSERR_ADDR (0x1D4) của khối ngắt, ghi bit0=1 để xóa.
+//   bus_error (cổng ra) = cờ lỗi đang chốt (LED / quan sát).
+//   Địa chỉ không map -> DECERR; RAM ngoài không trả lời quá EXT_RAM_TIMEOUT
+//   chu kỳ -> SLVERR (axi_interconnect).
 //
 // Bus có 3 slave (Timer, Interrupt, FIR). Địa chỉ không map: ghi bị bỏ
-//   qua, đọc ra 0, bus không treo (xem axi_interconnect).
+//   qua, đọc ra 0, BRESP/RRESP = DECERR, bus không treo (xem axi_interconnect).
 //
 // Mở rộng (đề mục riêng, mặc định TẮT): RAM dữ liệu ngoài 64 KB
 //   ENABLE_EXT_RAM = 0 (mặc định): cấu hình A, giống hệt SoC FIR11 trước đó;
@@ -48,15 +55,28 @@
 
 module soc_top #(
     parameter ENABLE_EXT_RAM    = 0,   // 0: config A (default), 1: add external data RAM
-    parameter EXT_RAM_USE_CACHE = 0    // with ENABLE_EXT_RAM=1: 0 = config B (bypass), 1 = config C (cache)
+    parameter EXT_RAM_USE_CACHE = 0,   // with ENABLE_EXT_RAM=1: 0 = config B (bypass), 1 = config C (cache)
+    parameter EXT_RAM_TIMEOUT   = 1024 // A2: max cycles an AXI access waits for the external RAM
 ) (
     input  wire clk,
-    input  wire rst_n,
+    input  wire rst_n,                 // asynchronous, active low (synchronized inside)
 
-    output wire cpu_irq                // quan sát: yêu cầu ngắt tới CPU
+    output wire cpu_irq,               // quan sát: yêu cầu ngắt tới CPU
+    output wire bus_error              // A1: a bus error is captured (BUSERR.valid)
 );
 
-    wire rst = ~rst_n;
+    //------------------------------------------------------------
+    // S1: reset synchronizer (async assert, sync release)
+    //------------------------------------------------------------
+    wire rst_n_sync;
+
+    reset_sync #(.STAGES(2)) u_rst_sync (
+        .clk       (clk),
+        .rst_n_in  (rst_n),
+        .rst_n_out (rst_n_sync)
+    );
+
+    wire rst = ~rst_n_sync;
 
     //------------------------------------------------------------
     // CPU <-> AXI master
@@ -101,15 +121,29 @@ module soc_top #(
     wire        axi_rvalid;
     wire        axi_rready;
 
+    // A1: bus error capture (master) -> BUSERR registers (interrupt block)
+    wire        bus_err;               // pulse with bus_ready (observation)
+    wire        buserr_clr, buserr_valid, buserr_write, buserr_overflow;
+    wire [1:0]  buserr_resp;
+    wire [31:0] buserr_addr;
+    assign bus_error = buserr_valid;
+
     cpu_axi_master u_axi_master (
         .clk           (clk),
-        .rst_n         (rst_n),
+        .rst_n         (rst_n_sync),
         .mem_read      (bus_rd),
         .mem_write     (bus_wr),
         .mem_addr      (bus_addr),
         .mem_wdata     (bus_wdata),
         .mem_rdata     (bus_rdata),
         .mem_ready     (bus_ready),
+        .mem_err       (bus_err),
+        .err_clr       (buserr_clr),
+        .err_valid     (buserr_valid),
+        .err_write     (buserr_write),
+        .err_resp      (buserr_resp),
+        .err_addr      (buserr_addr),
+        .err_overflow  (buserr_overflow),
         .M_AXI_AWADDR  (axi_awaddr),
         .M_AXI_AWVALID (axi_awvalid),
         .M_AXI_AWREADY (axi_awready),
@@ -154,10 +188,11 @@ module soc_top #(
     wire        ext_ram_ready;
 
     axi_interconnect #(
-        .ENABLE_EXT_RAM (ENABLE_EXT_RAM)
+        .ENABLE_EXT_RAM  (ENABLE_EXT_RAM),
+        .EXT_RAM_TIMEOUT (EXT_RAM_TIMEOUT)
     ) u_interconnect (
         .clk             (clk),
-        .rst_n           (rst_n),
+        .rst_n           (rst_n_sync),
         // from AXI master
         .s_axi_awaddr    (axi_awaddr),
         .s_axi_awvalid   (axi_awvalid),
@@ -225,16 +260,19 @@ module soc_top #(
     endgenerate
 
     //------------------------------------------------------------
-    // Timer (0x080): 1 register, write = compare & start, read = count
+    // Timer (0x080): 0x00 LEGACY one-shot (unchanged), 0x04 PERIOD,
+    //   0x08 CTRL (ENABLE/PERIODIC), 0x0C TICK_COUNT; see timer.v
     //------------------------------------------------------------
     timer u_timer (
-        .clk    (clk),
-        .rst_n  (rst_n),
-        .wr_en  (timer_wr_en),
-        .rd_en  (timer_rd_en),
-        .wdata  (write_data),
-        .rdata  (timer_rdata),
-        .irq    (timer_irq)
+        .clk     (clk),
+        .rst_n   (rst_n_sync),
+        .wr_en   (timer_wr_en),
+        .rd_en   (timer_rd_en),
+        .wr_addr (write_addr),
+        .rd_addr (read_addr),
+        .wdata   (write_data),
+        .rdata   (timer_rdata),
+        .irq     (timer_irq)
     );
 
     //------------------------------------------------------------
@@ -242,7 +280,7 @@ module soc_top #(
     //------------------------------------------------------------
     fir11_wrapper u_fir (
         .clk     (clk),
-        .rst_n   (rst_n),
+        .rst_n   (rst_n_sync),
         .wr_en   (fir_wr_en),
         .rd_en   (fir_rd_en),
         .wr_addr (write_addr),
@@ -260,11 +298,12 @@ module soc_top #(
     wire [`NUM_INTERRUPTS-1:0] irq_pending;
     wire                       irq_ack;
     wire [`INT_ID_WIDTH-1:0]   irq_ack_id;
+    wire                       irq_claim;
     wire [`INT_ID_WIDTH-1:0]   irq_id;
 
     interrupt_axi_wrapper u_int_regs (
         .clk          (clk),
-        .rst_n        (rst_n),
+        .rst_n        (rst_n_sync),
         .wr_en        (interrupt_wr_en),
         .rd_en        (interrupt_rd_en),
         .wr_addr      (write_addr),
@@ -274,9 +313,16 @@ module soc_top #(
         .irq_enable   (irq_enable),
         .ack          (irq_ack),
         .ack_id       (irq_ack_id),
+        .status_rd    (irq_claim),
         .pending      (irq_pending),
         .interrupt    (cpu_irq),
-        .interrupt_id (irq_id)
+        .interrupt_id (irq_id),
+        .buserr_valid    (buserr_valid),
+        .buserr_write    (buserr_write),
+        .buserr_resp     (buserr_resp),
+        .buserr_overflow (buserr_overflow),
+        .buserr_addr     (buserr_addr),
+        .buserr_clr      (buserr_clr)
     );
 
     interrupt_controller u_int_ctrl (
@@ -286,6 +332,7 @@ module soc_top #(
         .irq_enable   (irq_enable),
         .ack          (irq_ack),
         .ack_id       (irq_ack_id),
+        .claim        (irq_claim),
         .pending      (irq_pending),
         .interrupt    (cpu_irq),
         .interrupt_id (irq_id)

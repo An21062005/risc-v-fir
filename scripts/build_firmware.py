@@ -10,6 +10,12 @@ Firmware (--firmware, cùng startup.S + linker.ld, mỗi firmware một thư m�
                         + symbols.mem: địa chỉ fir_input/fir_output/... đọc từ ELF cho testbench
   ext_ram_test          ext_ram_test.c -> firmware/build/ext_ram_test/ (Bước 4a: lw/sw RAM ngoài)
   fir_1000              fir_1000.c -> firmware/build/fir_1000/ (Bước 4: 1000 mẫu trong RAM ngoài)
+  fir_timer             fir_timer.c + startup_irq.S + linker_irq.ld -> firmware/build/fir_timer/
+                        (Giai đoạn 3: Timer IRQ 10 kHz -> 32 mẫu FIR, FIR IRQ); fir_timer_stress: PERIOD 100
+  fir_timer_1000        fir_timer_1000.c (Giai đoạn 4: 1000 mẫu RAM ngoài, Timer IRQ + FIR IRQ, không regtest)
+  timer_irq_test        timer_irq_test.c + startup_irq.S + linker_irq.ld -> firmware/build/timer_irq_test/
+                        (Timer IRQ: vector 0x10, ISR, ACK, mret). Firmware DUY NHẤT được dùng mret,
+                        và chỉ đúng tại __trap_mret; symbols.mem có cả địa chỉ IMEM (vùng ISR).
 
 Các bước:
   1. GCC (toolchain RISC-V đi kèm Vivado) build firmware/startup.S + <nguồn C> -> <tên>.elf
@@ -59,7 +65,36 @@ FIRMWARES = {
                          symbols=["__stack_limit", "__stack_top"]),
     "fir_1000":   dict(c_src="fir_1000.c",   out=DEFAULT_OUT / "fir_1000",   stem="fir_1000",
                        symbols=["__stack_limit", "__stack_top"]),
+    # startup/linker riêng; allow_mret: mret (rtl/cpu_soc.v hỗ trợ) chỉ được ở symbol __trap_mret
+    "timer_irq_test": dict(c_src="timer_irq_test.c", out=DEFAULT_OUT / "timer_irq_test",
+                           stem="timer_irq_test", startup="startup_irq.S", linker="linker_irq.ld",
+                           allow_mret=True,
+                           symbols=["irq_count", "spurious_count", "__stack_limit", "__stack_top",
+                                    "__trap_entry", "__trap_mret", "__isr_end",
+                                    "__regtest_loop", "__regtest_exit"]),
 }
+# Giai đoạn 3: Timer IRQ điều phối 32 mẫu FIR, FIR IRQ báo kết quả (startup_irq.S dùng chung)
+_FIR_TIMER = dict(c_src="fir_timer.c", startup="startup_irq.S", linker="linker_irq.ld", allow_mret=True,
+                  symbols=["fst", "fir_input", "fir_output",
+                           "__stack_limit", "__stack_top", "__trap_entry", "__trap_mret", "__isr_end",
+                           "__regtest_loop", "__regtest_exit"])
+_IRQ_DEFS = ["IRQ_C_HANDLER=irq_handler", "REGTEST_COUNTER=fst+8", "REGTEST_NO_EXT_RAM"]
+FIRMWARES["fir_timer"] = dict(_FIR_TIMER, out=DEFAULT_OUT / "fir_timer", stem="fir_timer",
+                              defines=_IRQ_DEFS)
+# cố ý quá tải (PERIOD 100 clock < thời gian xử lý 1 mẫu): tick gộp, trễ, Timer+FIR cùng pending
+FIRMWARES["fir_timer_stress"] = dict(_FIR_TIMER, out=DEFAULT_OUT / "fir_timer_stress", stem="fir_timer_stress",
+                                     defines=_IRQ_DEFS + ["FIR_TIMER_PERIOD=100u", "FIR_TIMER_STRESS"])
+# Giai đoạn 4: 1000 mẫu trong RAM ngoài, cùng ISR (fir_timer_isr.h), không có vòng kiểm tra thanh ghi
+FIRMWARES["fir_timer_1000"] = dict(c_src="fir_timer_1000.c", startup="startup_irq.S", linker="linker_irq.ld",
+                                   allow_mret=True, out=DEFAULT_OUT / "fir_timer_1000", stem="fir_timer_1000",
+                                   defines=_IRQ_DEFS,
+                                   symbols=["fst", "__stack_limit", "__stack_top", "__trap_entry", "__trap_mret",
+                                            "__isr_end"])
+FIRMWARES["fir_timer_1000_stress"] = dict(FIRMWARES["fir_timer_1000"],
+    out=DEFAULT_OUT / "fir_timer_1000_stress", stem="fir_timer_1000_stress",
+    defines=_IRQ_DEFS + ["FIR_TIMER_PERIOD=100u"])
+MRET = 0x3020_0073      # rtl/cpu_soc.v MRET_INSTR
+TRAP_VECTOR = 0x10      # rtl/cpu_soc.v TRAP_VECTOR
 
 CFLAGS = [
     "-march=rv32i", "-mabi=ilp32",       # cấu hình theo yêu cầu; ISA thật còn hẹp hơn -> kiểm tra bước 5
@@ -219,9 +254,10 @@ def main():
                     help=f"thư mục chứa {PREFIX}gcc.exe (mặc định {DEFAULT_TOOLCHAIN}, hoặc biến RISCV_TOOLCHAIN)")
     ap.add_argument("--firmware", choices=sorted(FIRMWARES), default="smoke",
                     help="smoke = main.c (Bước 1, mặc định), fir_smoke = fir_smoke.c (Bước 2), "
-                         "fir_stream = fir_stream.c (Bước 3), ext_ram_test / fir_1000 (Bước 4)")
+                         "fir_stream = fir_stream.c (Bước 3), ext_ram_test / fir_1000 (Bước 4), "
+                         "timer_irq_test (Timer IRQ)")
     ap.add_argument("--src", type=Path, default=FW_DIR,
-                    help="thư mục chứa startup.S, <nguồn C>, linker.ld (mặc định firmware/)")
+                    help="thư mục chứa startup*.S, <nguồn C>, linker*.ld (mặc định firmware/)")
     ap.add_argument("--out", type=Path,
                     help="thư mục kết quả (mặc định firmware/build cho smoke, "
                          "firmware/build/fir_smoke cho fir_smoke)")
@@ -229,6 +265,9 @@ def main():
     args = ap.parse_args()
 
     fw = FIRMWARES[args.firmware]
+    startup, linker = fw.get("startup", "startup.S"), fw.get("linker", "linker.ld")
+    defines = [f"-D{d}" for d in fw.get("defines", [])]    # áp cho cả startup .S và nguồn C
+    allow_mret = fw.get("allow_mret", False)
     out = (args.out or fw["out"]).resolve()
     src = args.src.resolve()
     for name, other in FIRMWARES.items():
@@ -250,8 +289,8 @@ def main():
     try:
         # ---- 1. Build ----
         version = run([tool("gcc"), "--version"], log).splitlines()[0]
-        run([tool("gcc"), *CFLAGS, args.opt, "-T", src / "linker.ld", *LDFLAGS,
-             f"-Wl,-Map={map_path}", src / "startup.S", src / fw["c_src"], "-o", elf_path], log)
+        run([tool("gcc"), *CFLAGS, *defines, args.opt, "-T", src / linker, *LDFLAGS,
+             f"-Wl,-Map={map_path}", src / startup, src / fw["c_src"], "-o", elf_path], log)
 
         # ---- 2. ELF header ----
         elf = Elf(elf_path)
@@ -267,6 +306,8 @@ def main():
                              f"phải bằng reset PC 0x{RESET_PC:08x}")
         if syms.get("sig") != DMEM_BASE:
             raise BuildError("struct sig (signature) phải ở đầu DMEM 0x10000000")
+        if allow_mret and syms.get("__trap_entry") != TRAP_VECTOR:
+            raise BuildError(f"__trap_entry = {syms.get('__trap_entry')}: phải ở TRAP_VECTOR 0x{TRAP_VECTOR:x}")
 
         # ---- 3. Section -> vùng nhớ ----
         imem = [NOP] * IMEM_WORDS
@@ -316,7 +357,10 @@ def main():
             for i in range(0, len(blob), 4):
                 addr = s["addr"] + i
                 w = struct.unpack_from("<I", blob, i)[0]
-                why = check_instruction(w)
+                if allow_mret and w == MRET and addr == syms.get("__trap_mret"):
+                    why = None              # mret của trap entry: CPU giải mã (rtl/cpu_soc.v)
+                else:
+                    why = check_instruction(w)
                 name = mnem.get(addr, "?").split()[0] if mnem.get(addr) else "?"
                 hist[name] = hist.get(name, 0) + 1
                 if why:
@@ -330,8 +374,9 @@ def main():
         for name in fw["symbols"]:
             if name not in syms:
                 raise BuildError(f"thiếu symbol {name} (cần cho symbols.mem)")
-            if not (DMEM_BASE <= syms[name] <= DMEM_BASE + 4 * DMEM_WORDS) or syms[name] % 4:
-                raise BuildError(f"symbol {name} = 0x{syms[name]:08x} ngoài DMEM hoặc không căn word")
+            if not (DMEM_BASE <= syms[name] <= DMEM_BASE + 4 * DMEM_WORDS or
+                    IMEM_BASE <= syms[name] <= IMEM_BASE + 4 * IMEM_WORDS) or syms[name] % 4:
+                raise BuildError(f"symbol {name} = 0x{syms[name]:08x} ngoài DMEM/IMEM hoặc không căn word")
             sym_rows.append((name, syms[name]))
         write_mem(out / "program.mem", imem)
         write_mem(out / "data.mem", dmem)
@@ -350,7 +395,7 @@ def main():
     rep = [
         "=" * 72, f"FIRMWARE BUILD - rvcore32_pipeline_soc - {args.firmware} ({fw['c_src']})", "=" * 72,
         f"Compiler     : {version}",
-        f"Cờ           : {' '.join(CFLAGS)} {args.opt} {' '.join(LDFLAGS)}",
+        f"Cờ           : {' '.join(CFLAGS + defines)} {args.opt} {' '.join(LDFLAGS)}",
         f"ELF          : {rel(elf_path)}  entry 0x{elf.e_entry:08x} (= reset PC), ELF32 RISC-V, "
         f"không RVC, ilp32",
         "", f"{'Section':<12}{'Vùng':<6}{'Địa chỉ':>12}{'Byte':>7}  Nạp từ",
@@ -362,6 +407,7 @@ def main():
         f"{imem_used // 4} lệnh",
         f"DMEM: {dmem_used}/{4 * DMEM_WORDS} byte dữ liệu + stack "
         f"[0x{stack_limit:08x}, 0x{stack_top:08x}) {stack_top - stack_limit} byte, sp đầu = 0x{stack_top:08x}",
+        f"Src : {startup} + {fw['c_src']}, {linker}" + (", mret cho phép tại __trap_mret" if allow_mret else ""),
         f"ISA : {imem_used // 4} lệnh, tất cả thuộc tập CPU giải mã đúng. Dùng: "
         + ", ".join(f"{k}×{v}" for k, v in sorted(hist.items())),
         f"Ra  : {rel(out / 'program.mem')} ({IMEM_WORDS} word, trống = NOP), "

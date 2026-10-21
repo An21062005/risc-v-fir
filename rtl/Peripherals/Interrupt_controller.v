@@ -15,6 +15,13 @@
 //   ISR ghi ACK thì bản gốc sẽ xóa nhầm Timer và để lại FIR -> mất ngắt Timer
 //   và phục vụ FIR hai lần. Muốn giữ hành vi cũ: nối ack_id = interrupt_id
 //   (interrupt_top bên dưới làm đúng như vậy).
+//   I1 (2026-10-21): cổng claim (= CPU đọc STATUS). newer[i] bật khi nguồn i có
+//   cạnh mới lúc pending[i] đã = 1 và sau lần claim gần nhất của nguồn i. ACK
+//   chỉ xóa pending[i] nếu không có sự kiện mới như vậy còn ở mức cao
+//   (pending <= newer & irq_in): ACK trễ của sự kiện cũ không xóa sự kiện mới
+//   (FIR: gửi DATA_IN trước ACK). Nguồn xung (Timer) giữ nguyên hành vi cũ
+//   vì irq_in = 0 lúc ACK; đọc kết quả bằng polling rồi ISR cho sự kiện sau
+//   không gây ngắt lặp vì STATUS read đã claim. Kiểm: tb/tb_irq_i1.v.
 //======================================================================
 
 module interrupt_controller(
@@ -45,6 +52,8 @@ module interrupt_controller(
     input wire ack,
 
     input wire [`INT_ID_WIDTH-1:0] ack_id,   // nguồn cần xóa khi ack=1 (thêm mới)
+
+    input wire claim,                        // FIX I1: CPU đọc STATUS ở chu kỳ này
 
     //------------------------------------------------------------
     // Pending Interrupts
@@ -119,6 +128,22 @@ module interrupt_controller(
 
     integer i;
 
+    // FIX I1: newer[i] = cạnh mới đến khi pending[i] đã = 1, sau lần CPU đọc STATUS
+    // (claim) nguồn i gần nhất -> ACK trễ của sự kiện cũ không xóa sự kiện này.
+    reg [`NUM_INTERRUPTS-1:0] newer;
+    integer r;
+    always @(posedge clk or posedge rst) begin
+        if (rst)
+            newer <= {`NUM_INTERRUPTS{1'b0}};
+        else
+            for (r = 0; r < `NUM_INTERRUPTS; r = r + 1)
+                if (irq_rising[r] && pending[r])
+                    newer[r] <= 1'b1;
+                else if ((ack && (ack_id == r)) ||
+                         (claim && interrupt && (interrupt_id == r)))
+                    newer[r] <= 1'b0;
+    end
+
     always @(posedge clk or posedge rst) begin
 
         if (rst) begin
@@ -155,7 +180,7 @@ module interrupt_controller(
                     (ack_id == i)          // trước đây: interrupt && (interrupt_id == i)
                 ) begin
 
-                    pending[i] <= 1'b0;
+                    pending[i] <= newer[i] & irq_in[i];   // FIX I1
 
                 end
 
@@ -292,6 +317,8 @@ module interrupt_top(
         .ack(ack),
 
         .ack_id(interrupt_id),   // giữ hành vi gốc của interrupt_top
+
+        .claim(1'b0),
 
         .pending(pending),
 

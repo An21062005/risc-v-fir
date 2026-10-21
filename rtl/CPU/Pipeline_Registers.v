@@ -2,6 +2,8 @@
 //------------------------------------------------------------------
 // Bản sao từ tiny-riscv-soc (MIT). Thay đổi trong riscv-soc-fir-hls:
 //   Thêm cổng `hold` cho if_id_reg, id_ex_reg, ex_mem_reg, mem_wb_reg.
+//   id_ex_reg: tách reset bất đồng bộ và flush đồng bộ thành hai nhánh
+//   (trước đây gộp `rst || (flush && !hold)`), hành vi không đổi.
 //   hold = 1: thanh ghi giữ nguyên giá trị, kể cả khi có flush
 //   (dùng để đóng băng toàn bộ pipeline khi CPU chờ bus ngoại vi).
 //   Verilog-2001 không có giá trị mặc định cho cổng: nơi gọi cũ phải
@@ -137,9 +139,44 @@ module id_ex_reg(
 
 );
 
+// riscv-soc-fir-hls: rst (asynchronous) and flush (synchronous) are separate
+// branches, as in if_id_reg. Priority unchanged: rst > hold > flush > load.
+// The former `if (rst || (flush && !hold))` put a synchronous term in the
+// async-reset condition (non-standard template).
 always @(posedge clk or posedge rst) begin
 
-    if (rst || (flush && !hold)) begin
+    if (rst) begin
+
+        pc_out <= 32'd0;
+        read_data1_out <= 32'd0;
+        read_data2_out <= 32'd0;
+        immediate_out <= 32'd0;
+
+        rs1_out <= 5'd0;
+        rs2_out <= 5'd0;
+        rd_out <= 5'd0;
+
+        funct3_out <= 3'd0;
+        funct7_out <= 7'd0;
+
+        RegWrite_out <= 1'b0;
+        MemRead_out <= 1'b0;
+        MemWrite_out <= 1'b0;
+        MemToReg_out <= 1'b0;
+
+        Branch_out <= 1'b0;
+        Jump_out <= 1'b0;
+        JumpReg_out <= 1'b0;
+
+        ALUSrc_out <= 1'b0;
+        ALUOp_out <= 2'b00;
+
+        isLUI_out <= 1'b0;
+        isAUIPC_out <= 1'b0;
+
+    end
+
+    else if (flush && !hold) begin
 
         pc_out <= 32'd0;
         read_data1_out <= 32'd0;

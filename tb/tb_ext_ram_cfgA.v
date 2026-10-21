@@ -7,7 +7,7 @@
 // Kết quả chạy: docs/RTL_FIX_VERIFICATION.md.
 // DUT: axi_interconnect #(ENABLE_EXT_RAM=0) + interrupt_axi_wrapper; cổng
 // ext_ram_rdata/ext_ram_ready buộc 0 như soc_top (g_no_ext_ram). Kiểm:
-//   - 0x0001_0000 / 0x0001_FFFC: đọc ra 0, RRESP OKAY; ghi BRESP OKAY;
+//   - 0x0001_0000 / 0x0001_FFFC: đọc ra 0, RRESP DECERR; ghi BRESP DECERR (A1);
 //     không có yêu cầu ext_ram_read / ext_ram_write (vùng không map như trước)
 //   - MMIO interrupt ENABLE R/W, FIR/Timer rdata, mỗi lần đọc FIR đúng 1
 //     xung fir_rd_en, mỗi lần ghi FIR đúng 1 xung fir_wr_en
@@ -62,7 +62,9 @@ module tb_ext_ram_cfgA;
         .wr_en(interrupt_wr_en), .rd_en(interrupt_rd_en),
         .wr_addr(write_addr), .rd_addr(read_addr), .wdata(write_data), .rdata(interrupt_rdata),
         .irq_enable(), .ack(), .ack_id(),
-        .pending(2'b00), .interrupt(1'b0), .interrupt_id(3'd0)
+        .pending(2'b00), .interrupt(1'b0), .interrupt_id(3'd0),
+        .buserr_valid(1'b0), .buserr_write(1'b0), .buserr_resp(2'b00), .buserr_overflow(1'b0),
+        .buserr_addr(32'd0), .buserr_clr()
     );
 
     integer n_ext, n_fir_wr, n_fir_rd_cycles;
@@ -105,12 +107,13 @@ module tb_ext_ram_cfgA;
         @(negedge clk) rst_n = 1'b1;
 
         axi_write(32'h0001_0000, 32'h1234_5678, 4'hF, resp);
-        check_eq(resp, `AXI_RESP_OKAY, "unmapped write OKAY");
+        check_eq(resp, `AXI_RESP_DECERR, "unmapped write DECERR");
         axi_read(32'h0001_0000, r, resp);
         check_eq(r, 32'd0, "unmapped read 0 (ext RAM disabled)");
-        check_eq(resp, `AXI_RESP_OKAY, "unmapped read OKAY");
+        check_eq(resp, `AXI_RESP_DECERR, "unmapped read DECERR");
         axi_read(32'h0001_FFFC, r, resp);
         check_eq(r, 32'd0, "unmapped read 0 at window end");
+        check_eq(resp, `AXI_RESP_DECERR, "unmapped read DECERR at window end");
         check_eq(n_ext, 0, "no ext_ram strobes in config A");
 
         axi_write(32'h0000_01C0, 32'h2, 4'hF, resp);
