@@ -1,7 +1,6 @@
 `timescale 1ns/1ps
 
 // Directed instruction fixture, not a firmware build. Exercises the actual CPU,
-// AXI master, FIR HLS, interrupt controller and long-latency RAM B/C backend.
 module tb_cpu_bus;
     parameter USE_CACHE = 0;
     reg clk = 0;

@@ -2,56 +2,7 @@
 `include "soc_pkg.vh"
 `include "interrupt_pkg.vh"
 
-//======================================================================
-// soc_top : SoC RISC-V 5 giai đoạn + IP FIR (HLS) + bộ điều khiển ngắt
-//======================================================================
-// Đường dữ liệu:
-//   rvcore32_pipeline_soc --(bus_*)--> cpu_axi_master --(AXI4-Lite)-->
-//   axi_interconnect --(wr_en/rd_en, write_addr/read_addr, write_data)-->
-//     { timer (0x080), interrupt_axi_wrapper (0x1C0), fir11_wrapper (0x200) }
-//
-// FIR: fir11_wrapper instance trực tiếp module `fir` do Vitis HLS v2024.1 sinh
-//   ra (FIR11, bản sao trong rtl/Peripherals/FIR11/). Không còn tham số chọn
-//   stub/FIR51; danh sách file: rtl/filelist_fir11.f. Cần chép 2 file .dat của
-//   FIR11 vào thư mục chạy mô phỏng (xem rtl/Peripherals/FIR11/README.md).
-//
-// Ngắt: irq_in = {fir_irq, timer_irq}  (IRQ_TIMER = 0, IRQ_FIR = 1)
-//   interrupt_controller.interrupt -> irq của CPU.
-//
-// Reset: ngõ vào rst_n (mức thấp). CPU và interrupt_controller dùng
-//   rst = ~rst_n (mức cao). AXI master, interconnect và các ngoại vi dùng rst_n.
-//   S1 (2026-10-21): rst_n qua reset_sync (rtl/reset_sync.v): bật bất đồng bộ
-//   (không cần clock), nhả đồng bộ sau 2 cạnh clk. Mọi khối bên trong dùng
-//   rst_n_sync / rst = ~rst_n_sync; chân rst_n chỉ vào reset_sync.
-//
-// Lỗi bus (A1/A2): cpu_axi_master chốt lỗi BRESP/RRESP đầu tiên; phần mềm đọc
-//   qua BUSERR (0x1D0) / BUSERR_ADDR (0x1D4) của khối ngắt, ghi bit0=1 để xóa.
-//   bus_error (cổng ra) = cờ lỗi đang chốt (LED / quan sát).
-//   Địa chỉ không map -> DECERR; RAM ngoài không trả lời quá EXT_RAM_TIMEOUT
-//   chu kỳ -> SLVERR (axi_interconnect).
-//
-// Bus có 3 slave (Timer, Interrupt, FIR). Địa chỉ không map: ghi bị bỏ
-//   qua, đọc ra 0, BRESP/RRESP = DECERR, bus không treo (xem axi_interconnect).
-//
-// Mở rộng (đề mục riêng, mặc định TẮT): RAM dữ liệu ngoài 64 KB
-//   ENABLE_EXT_RAM = 0 (mặc định): cấu hình A, giống hệt SoC FIR11 trước đó;
-//     không instance gì thêm, vùng 0x0001_0000-0x0001_FFFF không map.
-//   ENABLE_EXT_RAM = 1: thêm slave thứ 4
-//     axi_interconnect --(cpu_read/cpu_write/cpu_addr/cpu_wdata/cpu_rdata/
-//       cpu_ready)--> cache_top #(USE_CACHE = EXT_RAM_USE_CACHE)
-//       EXT_RAM_USE_CACHE = 0 : cấu hình B, bypass -> arbiter -> sdram_top
-//       EXT_RAM_USE_CACHE = 1 : cấu hình C, cache_controller -> arbiter -> sdram_top
-//     (chốt/giữ yêu cầu và tuần tự hóa đọc/ghi nằm trong axi_interconnect)
-//     CPU thấy RAM ở 0x4001_0000-0x4001_FFFF (bus 0x0001_0000-0x0001_FFFF);
-//     cpu_soc đã đưa mọi địa chỉ addr[31:30]==01 ra bus nên không sửa CPU.
-//     Chỉ tăng dung lượng DỮ LIỆU; lệnh vẫn lấy từ IMEM 1 KB, DMEM 1 KB giữ
-//     nguyên. sdram_top chứa mô hình thiết bị (sdram_model): B/C chỉ dùng
-//     cho mô phỏng, không nối tới chip SDRAM thật.
-//   Danh sách file: A = rtl/filelist_fir11.f;
-//     B/C = rtl/filelist_fir11.f + rtl/filelist_ext_ram_sim.f.
-//
-// Regression XSim: CPU/FIR/IRQ/RAM B/C; xem docs/RTL_FIX_VERIFICATION.md.
-//======================================================================
+// SoC RV32I + FIR11: AXI4-Lite, MMIO, IRQ và RAM ngoài tùy chọn; dùng chung clock.
 
 module soc_top #(
     parameter ENABLE_EXT_RAM    = 0,   // 0: config A (default), 1: add external data RAM
@@ -65,9 +16,7 @@ module soc_top #(
     output wire bus_error              // A1: a bus error is captured (BUSERR.valid)
 );
 
-    //------------------------------------------------------------
     // S1: reset synchronizer (async assert, sync release)
-    //------------------------------------------------------------
     wire rst_n_sync;
 
     reset_sync #(.STAGES(2)) u_rst_sync (
@@ -78,9 +27,7 @@ module soc_top #(
 
     wire rst = ~rst_n_sync;
 
-    //------------------------------------------------------------
     // CPU <-> AXI master
-    //------------------------------------------------------------
     wire        bus_rd;
     wire        bus_wr;
     wire [31:0] bus_addr;
@@ -100,9 +47,7 @@ module soc_top #(
         .bus_ready (bus_ready)
     );
 
-    //------------------------------------------------------------
     // AXI4-Lite master <-> interconnect
-    //------------------------------------------------------------
     wire [31:0] axi_awaddr;
     wire        axi_awvalid;
     wire        axi_awready;
@@ -163,9 +108,7 @@ module soc_top #(
         .M_AXI_RREADY  (axi_rready)
     );
 
-    //------------------------------------------------------------
     // Interconnect <-> peripherals
-    //------------------------------------------------------------
     wire [31:0] write_addr;
     wire [31:0] write_data;
     wire [31:0] read_addr;
@@ -233,13 +176,10 @@ module soc_top #(
         .ext_ram_ready   (ext_ram_ready)
     );
 
-    //------------------------------------------------------------
     // External data RAM (0x0001_0000, optional, simulation only)
-    //------------------------------------------------------------
     generate
         if (ENABLE_EXT_RAM != 0) begin : g_ext_ram
             // cache_top: cache_controller (or bypass) -> cache_dma_arbiter
-            // (DMA inputs tied 0) -> sdram_top (controller + sdram_model)
             cache_top #(
                 .USE_CACHE (EXT_RAM_USE_CACHE)
             ) u_ext_mem (
@@ -259,10 +199,7 @@ module soc_top #(
         end
     endgenerate
 
-    //------------------------------------------------------------
     // Timer (0x080): 0x00 LEGACY one-shot (unchanged), 0x04 PERIOD,
-    //   0x08 CTRL (ENABLE/PERIODIC), 0x0C TICK_COUNT; see timer.v
-    //------------------------------------------------------------
     timer u_timer (
         .clk     (clk),
         .rst_n   (rst_n_sync),
@@ -275,9 +212,7 @@ module soc_top #(
         .irq     (timer_irq)
     );
 
-    //------------------------------------------------------------
     // FIR11 HLS peripheral (0x200)
-    //------------------------------------------------------------
     fir11_wrapper u_fir (
         .clk     (clk),
         .rst_n   (rst_n_sync),
@@ -290,9 +225,7 @@ module soc_top #(
         .irq     (fir_irq)
     );
 
-    //------------------------------------------------------------
     // Interrupt block (0x1C0): register wrapper + controller
-    //------------------------------------------------------------
     wire [`NUM_INTERRUPTS-1:0] irq_in = {fir_irq, timer_irq};   // [IRQ_FIR, IRQ_TIMER]
     wire [`NUM_INTERRUPTS-1:0] irq_enable;
     wire [`NUM_INTERRUPTS-1:0] irq_pending;

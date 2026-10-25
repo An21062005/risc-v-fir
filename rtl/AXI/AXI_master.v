@@ -1,14 +1,6 @@
 `timescale 1ns/1ps
 
-// Bản sao từ tiny-riscv-soc (MIT). Thay đổi: ST_IDLE chỉ nhận yêu cầu khi
-// !mem_ready (chống gửi trùng giao dịch), xem chú thích BUGFIX bên dưới.
-// A1 (2026-10-21): kiểm BRESP/RRESP. RRESP != OKAY -> mem_rdata = 0 (không đưa
-//   RDATA của giao dịch lỗi vào CPU). Mọi lỗi: mem_err = 1 cùng chu kỳ mem_ready;
-//   lỗi ĐẦU TIÊN chốt vào err_valid/err_write/err_resp/err_addr (giữ tới err_clr),
-//   lỗi tiếp theo khi err_valid = 1 chỉ bật err_overflow. CPU không có trap/CSR:
-//   phần mềm đọc trạng thái qua thanh ghi BUSERR (interrupt_axi_wrapper).
-//   Không có timeout ở master: bỏ VALID trước handshake là vi phạm AXI; thời
-//   gian chờ được chặn ở phía slave (axi_interconnect, A2).
+// Chuyển bus CPU sang AXI4-Lite và chốt lỗi đầu tiên vào BUSERR.
 `include "soc_pkg.vh"
 
 module cpu_axi_master (
@@ -16,9 +8,7 @@ module cpu_axi_master (
     input wire clk,
     input wire rst_n,
 
-    //---------------------------------------------------------
     // CPU Interface
-    //---------------------------------------------------------
 
     input wire        mem_read,
     input wire        mem_write,
@@ -30,9 +20,7 @@ module cpu_axi_master (
     output reg        mem_ready,
     output reg        mem_err,        // A1: 1 cùng chu kỳ mem_ready nếu BRESP/RRESP != OKAY
 
-    //---------------------------------------------------------
     // A1: bus error capture (first error, sticky until err_clr)
-    //---------------------------------------------------------
 
     input  wire       err_clr,
     output reg        err_valid,
@@ -41,42 +29,32 @@ module cpu_axi_master (
     output reg [31:0] err_addr,
     output reg        err_overflow,
 
-    //---------------------------------------------------------
     // AXI Write Address Channel
-    //---------------------------------------------------------
 
     output reg [31:0] M_AXI_AWADDR,
     output reg        M_AXI_AWVALID,
     input  wire        M_AXI_AWREADY,
 
-    //---------------------------------------------------------
     // AXI Write Data Channel
-    //---------------------------------------------------------
 
     output reg [31:0] M_AXI_WDATA,
     output reg [3:0]  M_AXI_WSTRB,
     output reg        M_AXI_WVALID,
     input  wire        M_AXI_WREADY,
 
-    //---------------------------------------------------------
     // AXI Write Response Channel
-    //---------------------------------------------------------
 
     input  wire [1:0] M_AXI_BRESP,
     input  wire       M_AXI_BVALID,
     output reg        M_AXI_BREADY,
 
-    //---------------------------------------------------------
     // AXI Read Address Channel
-    //---------------------------------------------------------
 
     output reg [31:0] M_AXI_ARADDR,
     output reg        M_AXI_ARVALID,
     input  wire        M_AXI_ARREADY,
 
-    //---------------------------------------------------------
     // AXI Read Data Channel
-    //---------------------------------------------------------
 
     input wire [31:0] M_AXI_RDATA,
     input wire [1:0]  M_AXI_RRESP,
@@ -85,9 +63,7 @@ module cpu_axi_master (
 
 );
 
-    //---------------------------------------------------------
     // FSM STATES
-    //---------------------------------------------------------
 
     localparam ST_IDLE       = 3'd0;
     localparam ST_WRITE_ADDR = 3'd1;
@@ -98,16 +74,12 @@ module cpu_axi_master (
 
     reg [2:0] state;
 
-    //---------------------------------------------------------
     // CPU REQUEST REGISTERS
-    //---------------------------------------------------------
 
     reg [31:0] saved_addr;
     reg [31:0] saved_wdata;
 
-    //---------------------------------------------------------
     // Sequential FSM
-    //---------------------------------------------------------
 
     always @(posedge clk or negedge rst_n) begin
 
@@ -146,9 +118,7 @@ module cpu_axi_master (
 
         else begin
 
-            //-------------------------------------------------
             // Default: mem_ready is a one-cycle completion pulse
-            //-------------------------------------------------
 
             mem_ready <= 1'b0;
             mem_err   <= 1'b0;
@@ -158,21 +128,15 @@ module cpu_axi_master (
                 err_overflow <= 1'b0;
             end
 
-            //-------------------------------------------------
             // FSM
-            //-------------------------------------------------
 
             case (state)
 
-                //-------------------------------------------------
                 // IDLE
-                //-------------------------------------------------
 
                 ST_IDLE: begin
 
-                    //-------------------------------------------------
                     // Defaults
-                    //-------------------------------------------------
 
                     M_AXI_AWVALID <= 1'b0;
                     M_AXI_WVALID  <= 1'b0;
@@ -181,16 +145,9 @@ module cpu_axi_master (
                     M_AXI_ARVALID <= 1'b0;
                     M_AXI_RREADY  <= 1'b0;
 
-                    //-------------------------------------------------
                     // Capture WRITE request
-                    //-------------------------------------------------
 
-                    // riscv-soc-fir-hls BUGFIX: chỉ nhận yêu cầu khi
-                    // !mem_ready. Ở chu kỳ mem_ready=1 FSM đã về IDLE nhưng
-                    // CPU vẫn giữ mem_read/mem_write của CHÍNH lệnh vừa xong
-                    // (pipeline chỉ chạy tiếp ở cạnh clock cuối chu kỳ này).
-                    // Không chặn thì yêu cầu đó bị nhận thành giao dịch thứ
-                    // hai (ghi trùng, đọc trùng -> xóa cờ 2 lần, CPU treo).
+                    // Chặn nhận lại yêu cầu cũ trong chu kỳ mem_ready=1.
                     if (mem_write && !mem_ready) begin
 
                         saved_addr  <= mem_addr;
@@ -200,9 +157,7 @@ module cpu_axi_master (
 
                     end
 
-                    //-------------------------------------------------
                     // Capture READ request
-                    //-------------------------------------------------
 
                     else if (mem_read && !mem_ready) begin
 
@@ -214,22 +169,16 @@ module cpu_axi_master (
 
                 end
 
-                //-------------------------------------------------
                 // WRITE ADDRESS
-                //-------------------------------------------------
 
                 ST_WRITE_ADDR: begin
 
-                    //-------------------------------------------------
                     // Drive address
-                    //-------------------------------------------------
 
                     M_AXI_AWADDR  <= saved_addr;
                     M_AXI_AWVALID <= 1'b1;
 
-                    //-------------------------------------------------
                     // Wait for AW handshake
-                    //-------------------------------------------------
 
                     if (M_AXI_AWVALID && M_AXI_AWREADY) begin
 
@@ -241,23 +190,17 @@ module cpu_axi_master (
 
                 end
 
-                //-------------------------------------------------
                 // WRITE DATA
-                //-------------------------------------------------
 
                 ST_WRITE_DATA: begin
 
-                    //-------------------------------------------------
                     // Drive write data
-                    //-------------------------------------------------
 
                     M_AXI_WDATA  <= saved_wdata;
                     M_AXI_WSTRB  <= 4'b1111;
                     M_AXI_WVALID <= 1'b1;
 
-                    //-------------------------------------------------
                     // Wait for W handshake
-                    //-------------------------------------------------
 
                     if (M_AXI_WVALID && M_AXI_WREADY) begin
 
@@ -269,29 +212,21 @@ module cpu_axi_master (
 
                 end
 
-                //-------------------------------------------------
                 // WRITE RESPONSE
-                //-------------------------------------------------
 
                 ST_WRITE_RESP: begin
 
-                    //-------------------------------------------------
                     // Always ready for response
-                    //-------------------------------------------------
 
                     M_AXI_BREADY <= 1'b1;
 
-                    //-------------------------------------------------
                     // Wait for BVALID
-                    //-------------------------------------------------
 
                     if (M_AXI_BVALID && M_AXI_BREADY) begin
 
                         M_AXI_BREADY <= 1'b0;
 
-                        //-------------------------------------------------
                         // Write transaction completed
-                        //-------------------------------------------------
 
                         mem_ready <= 1'b1;
 
@@ -313,18 +248,14 @@ module cpu_axi_master (
 
                 end
 
-                //-------------------------------------------------
                 // READ ADDRESS
-                //-------------------------------------------------
 
                 ST_READ_ADDR: begin
 
                     M_AXI_ARADDR  <= saved_addr;
                     M_AXI_ARVALID <= 1'b1;
 
-                    //-------------------------------------------------
                     // AR handshake
-                    //-------------------------------------------------
 
                     if (M_AXI_ARVALID && M_AXI_ARREADY) begin
 
@@ -336,17 +267,13 @@ module cpu_axi_master (
 
                 end
 
-                //-------------------------------------------------
                 // READ DATA
-                //-------------------------------------------------
 
                 ST_READ_DATA: begin
 
                     M_AXI_RREADY <= 1'b1;
 
-                    //-------------------------------------------------
                     // Wait for RVALID
-                    //-------------------------------------------------
 
                     if (M_AXI_RVALID && M_AXI_RREADY) begin
 
@@ -367,9 +294,7 @@ module cpu_axi_master (
 
                         M_AXI_RREADY <= 1'b0;
 
-                        //-------------------------------------------------
                         // Read transaction completed
-                        //-------------------------------------------------
 
                         mem_ready <= 1'b1;
 
@@ -379,9 +304,7 @@ module cpu_axi_master (
 
                 end
 
-                //-------------------------------------------------
                 // DEFAULT
-                //-------------------------------------------------
 
                 default: begin
 

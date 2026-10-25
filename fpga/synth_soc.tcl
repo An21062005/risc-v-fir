@@ -1,15 +1,4 @@
-# synth_soc.tcl - Vivado non-project synthesis (+ optional place/route) of soc_top (S3/S4/F3)
-#
-# vivado -mode batch -source fpga/synth_soc.tcl -tclargs <project> <image dir> <out dir> [impl] [cfg]
-#   <image dir> : firmware image with program.mem + data.mem (scripts/build_firmware.py)
-#   impl        : 1 = also opt/place/route and report post-route timing (no bitstream)
-#   cfg         : C (ext RAM + cache, synthesis check only; main firmware needs RAM)
-# Wrapper: python scripts/run_vivado_synth.py (builds the firmware, runs this script, checks logs).
-#
-# Memory initialisation (F3): IMEM/DMEM use $readmemh("program.mem"/"data.mem") and the FIR11
-# HLS ROM/RAM use $readmemh("./<name>.dat"): all relative to Vivado's working directory. The
-# script copies the four files into <out dir>, cd's there, and the wrapper requires Vivado's
-# "$readmem data file ... is read successfully" message for each of them.
+# Synthesis soc_top và xuất báo cáo; tùy chọn place/route, không tạo bitstream.
 
 set proj   [file normalize [lindex $argv 0]]
 set image  [file normalize [lindex $argv 1]]

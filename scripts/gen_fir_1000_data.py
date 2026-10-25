@@ -1,31 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-gen_fir_1000_data.py - dữ liệu cho firmware/fir_timer_1000.c và tb/tb_cpu_fir_timer_1000.v.
-
-Nguồn: data_test/fir_test/output/<test>/input.dat (mặc định test_04_noise: tín hiệu
-trộn + nhiễu Gauss, có dấu), lấy đúng 1000 mẫu đầu [0, 1000).
-
-Expected: mô hình #1 = fir_model() trong file này
-  y[n] = sum_{k=0..10} c[k] * x[n-k], lịch sử ban đầu = 0, int32 wrap modulo 2^32
-  (đúng RTL HLS). Đối chiếu thêm với expected.dat của bộ dữ liệu (do
-  data_test/fir_test/generate_fir_data.py tính bằng numpy + Python thuần): phải khớp 1000/1000.
-Testbench có mô hình #2 riêng (Verilog) và so với expected.mem này.
-
-Bố trí trong RAM ngoài (soc_top ENABLE_EXT_RAM=1, CPU 0x4001_0000..0x4001_FFFF):
-  input[1000]  @ 0x4001_0000 .. 0x4001_0F9F
-  output[1000] @ 0x4001_1000 .. 0x4001_1F9F  (không chồng lấn)
-
-Ra:
-  data_test/fir_1000/input.mem     1000 word hex  (testbench nạp vào sdram_model trước reset)
-  data_test/fir_1000/expected.mem  1000 word hex  (chỉ testbench dùng)
-  data_test/fir_1000/layout.mem    [0] IN_ADDR [1] OUT_ADDR [2] N [3] EXP_SUM [4] EXP_XOR [5] IN_SUM
-  data_test/fir_1000/manifest.txt  nguồn, số mẫu, SHA-256, checksum
-  firmware/fir_1000_data.h         hằng số cho firmware (không chứa mảng)
-
-Chạy:  python scripts/gen_fir_1000_data.py [--test test_04_noise]
-       python scripts/gen_fir_1000_data.py --check   (exit 1 nếu file đã sinh lệch)
-"""
+'gen_fir_1000_data.py - dữ liệu cho firmware/fir_timer_1000.c và tb/tb_cpu_fir_timer_1000.v.'
 
 import argparse
 import hashlib

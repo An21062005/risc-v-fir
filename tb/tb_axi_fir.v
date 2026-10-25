@@ -2,7 +2,6 @@
 `include "soc_pkg.vh"
 
 // Integration regression: real interconnect, register wrapper and HLS FIR.
-// Drives AXI payload changes after handshake and queues a second request.
 module tb_axi_fir;
     reg clk = 0;
     always #5 clk = ~clk;
@@ -75,7 +74,6 @@ module tb_axi_fir;
     endtask
 
     // Keep the next AR valid immediately after the first handshake. Both
-    // responses must appear, ordered, with no phantom acceptance while busy.
     task queued_reads;
         reg [31:0] first, second;
         integer k;
@@ -219,8 +217,6 @@ module tb_axi_fir;
         @(negedge clk);
         check_eq(latency > 3, 1, "measured HLS latency");
         // Register peripherals have word semantics. Zero-strobe writes must
-        // have no effect; unsupported partial/unaligned accesses must fail
-        // without starting FIR or clearing its pending completion.
         rd_before = n_wr;
         axi_write(CTRL, 1, 4'b0000, resp);
         check_eq(resp, `AXI_RESP_OKAY, "zero WSTRB is an acknowledged no-op");
@@ -240,7 +236,6 @@ module tb_axi_fir;
         push(1);
 
         // The peripheral snapshots y before the read edge. If completion
-        // coincides with that edge, old y is returned and NEW done must survive.
         for (offset = -1; offset <= 1; offset = offset + 1) begin
             new_y = expected(32'd11 + offset);
             done_before = n_done;

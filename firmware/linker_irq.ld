@@ -1,9 +1,4 @@
-/*
- * Memory layout for fir_timer_1000.c and startup_irq.S.
- * IMEM 1 KB: _start at 0x00, __trap_entry at 0x10, then .text.isr,
- * reset and main. [__trap_entry, __isr_end) identifies interrupt code.
- * DMEM 1 KB: signature, rodata/data/bss, and a 256-byte stack at the top.
- */
+/* IMEM/DMEM 1 KB; vector IRQ 0x10, stack 256 byte ở cuối DMEM. */
 OUTPUT_ARCH(riscv)
 ENTRY(_start)
 
@@ -26,8 +21,7 @@ SECTIONS
         . = ALIGN(4);
     } > IMEM
 
-    /* Vùng kết quả cho testbench: luôn ở đầu DMEM (word 0..). Không có trong
-       data.mem (NOLOAD) -> giá trị đầu là 0, firmware tự ghi. */
+    /* Vùng kết quả cho testbench: luôn ở đầu DMEM (word 0..). Không có trong */
     .signature (NOLOAD) :
     {
         KEEP(*(.signature))

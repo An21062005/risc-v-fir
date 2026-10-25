@@ -1,32 +1,10 @@
-/*
- * startup_irq.S - startup cho fir_timer_1000.c, dùng linker_irq.ld.
- *
- * Cơ chế ngắt của rvcore32_pipeline_soc (rtl/cpu_soc.v), KHÔNG có CSR:
- *   - nhận ngắt: mepc = PC lệnh kế tiếp (nội bộ CPU), in_irq = 1, PC = 0x10
- *     (TRAP_VECTOR cố định). Không có mstatus/mie/mcause: không dùng lệnh CSR.
- *   - in_irq = 1 chặn ngắt mới -> không có ngắt lồng nhau.
- *   - mret (0x30200073): PC = mepc, in_irq = 0.
- *   - mức irq = pending & enable của interrupt_controller: ISR phải ACK
- *     nguồn trước mret, nếu không CPU vào lại ISR ngay.
- *
- * Bố trí:
- *   0x00 _start       : la sp, __stack_top; j _reset (+ 1 nop đệm)
- *   0x10 __trap_entry : lưu 16 thanh ghi caller-saved (ra, t0-t6, a0-a7) lên
- *                       stack (64 byte, giữ sp căn 16), gọi IRQ_C_HANDLER (C, ABI
- *                       ilp32 tự giữ s0-s11), khôi phục, mret.
- *   gp/tp: firmware không dùng (không gp-relaxation), C không ghi -> không cần lưu.
- *   Stack: ISR dùng chung stack của chương trình chính (một mức ngắt).
- *
- * IRQ_C_HANDLER mặc định là irq_handler của fir_timer_isr.h.
- */
+/* Startup và vector IRQ 0x10; lưu/khôi phục caller-saved, gọi ISR C rồi mret. */
 #ifndef IRQ_C_HANDLER
 #define IRQ_C_HANDLER irq_handler
 #endif
     .option norelax
 
-/*-------------------------------------------------------------------------
- * Vector table + trap entry (0x00 - ...)
- *-----------------------------------------------------------------------*/
+/* Vector table + trap entry (0x00 - ...) */
     .section .text.start, "ax"
     .globl _start
 _start:
@@ -76,9 +54,7 @@ __trap_entry:
 __trap_mret:
     mret
 
-/*-------------------------------------------------------------------------
- * Reset
- *-----------------------------------------------------------------------*/
+/* Reset */
     .section .text.reset, "ax"
 _reset:
     la      t0, __bss_start

@@ -1,59 +1,7 @@
 `timescale 1ns/1ps
-//--------------------------------------------------------------------------
-//                         axi_interconnect
-//--------------------------------------------------------------------------
-// Dựa trên AXI_Interconnect.v của tiny-riscv-soc (MIT). Thay đổi trong dự án
-// riscv-soc-fir-hls:
-//   - Tinh gọn: chỉ còn 3 slave đang dùng là TIMER (0x080), INTERRUPT (0x1C0)
-//     và FIR (0x200, thêm mới). Bỏ RAM bus, GPIO, UART, SPI, I2C, DMA cùng
-//     cổng ram_ready (SoC không có RAM trên bus, bản trước nối cứng ram_ready=1).
-//   - Giữ cấu trúc của 3 FSM gốc (decoder, write FSM,
-//     read FSM). Địa chỉ không thuộc slave nào: ghi bị bỏ qua, đọc ra 0,
-//     BRESP/RRESP = DECERR (A1, 2026-10-21; bản gốc trả OKAY). Bus không treo.
-//   - A2 (2026-10-21): RAM ngoài có thể không trả lời (backend treo). Write FSM
-//     (WRITE_RESP) và read FSM (READ_WAIT) đếm chu kỳ chờ done; tới
-//     EXT_RAM_TIMEOUT thì hạ yêu cầu và trả SLVERR (RDATA = 0). Arbiter đánh dấu
-//     yêu cầu bị bỏ là "orphan": vẫn giữ mem_read/mem_write + địa chỉ/dữ liệu đã
-//     chốt tới khi backend trả mem_ready rồi NUỐT completion đó (không báo done
-//     cho giao dịch sau). Khi orphan còn treo, yêu cầu mới không được cấp và cũng
-//     hết hạn -> mọi giao dịch đều kết thúc trong thời gian chặn trên.
-// Giao thức với ngoại vi (regression: docs/RTL_FIX_VERIFICATION.md):
-//   - Ghi: *_wr_en là xung 1 chu kỳ, write_addr/write_data hợp lệ đúng chu kỳ đó.
-//   - Đọc: *_rd_en là xung 1 chu kỳ sau READ_DATA; ngoại vi chốt ở cạnh
-//     READ_WAIT, interconnect lấy rdata ở cạnh READ_RESP kế tiếp.
-//     Mỗi giao dịch chỉ gây một lần tác dụng phụ khi đọc.
-//   - Ngoại vi nhiều thanh ghi chọn thanh ghi bằng addr[5:2].
-// Mở rộng RAM dữ liệu ngoài (tham số ENABLE_EXT_RAM, mặc định 0):
-//   - ENABLE_EXT_RAM = 0: decoder không bao giờ chọn EXT_RAM, mọi FSM chạy
-//     y như trước (0x0001_0000-0x0001_FFFF là địa chỉ không map).
-//   - ENABLE_EXT_RAM = 1: vùng EXT_RAM_BASE..EXT_RAM_END đi thẳng tới giao
-//     diện cpu_* của cache_top (rtl/Memory/cache_controller.v) qua cổng
-//     ext_ram_read/write/addr/wdata/rdata/ready. Phần chốt yêu cầu, giữ yêu
-//     cầu tới completion và tuần tự hóa (trước đây ở ext_ram_slave) nằm ở:
-//       axi_write_fsm : ở bắt tay W chốt offset (địa chỉ - EXT_RAM_BASE) và
-//         WDATA, kiểm WSTRB/căn lề; bật ext_ram_wr_req (mức) tới
-//         ext_ram_wr_done. WRITE_RESP chỉ bật BVALID khi có ext_ram_wr_done.
-//       axi_read_fsm  : ở READ_DATA chốt offset, kiểm căn lề; bật
-//         ext_ram_rd_req (mức) tới ext_ram_rd_done, chốt rdata đúng chu kỳ
-//         done. READ_WAIT chờ done rồi mới sang READ_RESP.
-//       axi_ext_ram_arbiter : một backend dùng chung -> mỗi lúc một yêu cầu,
-//         ghi trước đọc sau; cpu_read/cpu_write giữ mức, hạ tổ hợp ngay trong
-//         chu kỳ cpu_ready; done chỉ khi cpu_ready tới lúc đang phục vụ
-//         đúng yêu cầu đó (ready rảnh không được tính).
-//     Lựa chọn slave RAM được chốt lúc nhận AW/AR và giữ suốt giao dịch.
-//     Giới hạn truy cập (CPU chỉ có lw/sw): chỉ word căn 4 byte, WSTRB =
-//     1111. Ghi từng phần / lệch: không ghi gì, BRESP = SLVERR. Đọc lệch:
-//     RDATA = 0, RRESP = SLVERR. Cả hai không tạo yêu cầu tới bộ nhớ.
-//   - AW/AR chỉ được nhận khi IDLE; W chỉ được nhận sau AW. READY hạ
-//     ngay sau cạnh nhận, không báo nhận thêm giao dịch khi FSM đang bận.
-//   - MMIO Timer/Interrupt/FIR: chỉ word căn 4 byte. WSTRB=1111 ghi word,
-//     WSTRB=0000 là no-op. Ghi từng phần hoặc truy cập lệch trả SLVERR,
-//     không tạo wr_en/rd_en (không có tác dụng phụ).
-//--------------------------------------------------------------------------
+// Giải mã AXI4-Lite sang MMIO/RAM; truy cập không hợp lệ trả lỗi, backend chờ quá hạn trả SLVERR.
 
-//--------------------------------------------------------------------------
-//                     AXI Address Decoder
-//--------------------------------------------------------------------------
+// AXI Address Decoder
 
 `include "soc_pkg.vh"
 
@@ -113,9 +61,7 @@ module axi_address_decoder #(
 
 endmodule
 
-//--------------------------------------------------------------------------
-//                     AXI Write FSM
-//--------------------------------------------------------------------------
+// AXI Write FSM
 
 `include "soc_pkg.vh"
 
@@ -169,8 +115,6 @@ module axi_write_fsm #(
     reg [1:0] next_state;
 
     // READY reflects actual receive capacity, including the cycle directly
-    // after a handshake. Registered IDLE outputs used to acknowledge and lose
-    // a second AW/W while the state had already advanced.
     always @(*) begin
         s_axi_awready = rst_n && (state == IDLE);
         s_axi_wready  = rst_n && (state == WRITE_DATA);
@@ -284,7 +228,6 @@ module axi_write_fsm #(
                                 ext_ram_wr_err  <= 1'b1;    // nothing is written
                             end else begin
                                 // exactly one request per AXI write, latched
-                                // and held stable until ext_ram_wr_done
                                 ext_ram_wr_err  <= 1'b0;
                                 ext_ram_wr_req  <= 1'b1;
                                 ext_ram_wr_addr <= saved_awaddr - `EXT_RAM_BASE;
@@ -342,9 +285,7 @@ module axi_write_fsm #(
 
 endmodule
 
-//--------------------------------------------------------------------------
-//                     AXI Read FSM
-//--------------------------------------------------------------------------
+// AXI Read FSM
 
 `include "soc_pkg.vh"
 
@@ -385,7 +326,6 @@ module axi_read_fsm #(
     output reg [31:0]  read_addr,
 
     // External RAM: request held from READ_DATA until ext_ram_rd_done;
-    // ext_ram_rdata is only sampled in the ext_ram_rd_done cycle
     output reg         ext_ram_rd_req,
     output reg [31:0]  ext_ram_rd_addr,     // offset in the RAM window
     input  wire [31:0] ext_ram_rdata,
@@ -513,7 +453,6 @@ module axi_read_fsm #(
                             ext_ram_rd_err  <= 1'b1;        // nothing is read
                         end else begin
                             // exactly one request per AXI read, latched and
-                            // held stable until ext_ram_rd_done
                             ext_ram_rd_err  <= 1'b0;
                             ext_ram_rd_req  <= 1'b1;
                             ext_ram_rd_addr <= saved_araddr - `EXT_RAM_BASE;
@@ -523,7 +462,6 @@ module axi_read_fsm #(
 
                 READ_WAIT: begin
                     // Peripheral consumes the single rd_en pulse at this edge.
-                    // RAM: no second request; next-state logic waits for done.
                     if (ext_ram_rd_done) begin
                         ext_ram_rd_req  <= 1'b0;
                         ext_ram_rdata_q <= ext_ram_rdata;   // valid only this cycle (cache mode)
@@ -569,25 +507,7 @@ module axi_read_fsm #(
 
 endmodule
 
-//--------------------------------------------------------------------------
-//                     External RAM request arbiter
-//--------------------------------------------------------------------------
-// riscv-soc-fir-hls: serialises the held requests of axi_write_fsm and
-// axi_read_fsm onto the single cpu_* port of cache_top (one request at a
-// time, write before read if both are waiting; none is lost because each
-// FSM keeps its request until its own done).
-//   mem_read/mem_write : held while the granted request is in flight and
-//     dropped combinationally in the mem_ready cycle, so the backend's idle
-//     state (CACHE_IDLE / SDRAM_IDLE) never sees it as a new request.
-//   wr_done / rd_done  : = mem_ready while that request is granted. An idle
-//     or stale mem_ready (nothing granted) is never reported as completion.
-//   The requesting FSM clears its *_req on the same edge as active returns
-//   to ARB_NONE, so the request is not granted twice.
-//   A2: address/data are latched at grant (a later request cannot change them
-//   under an in-flight backend operation). If the FSM drops its request before
-//   mem_ready (timeout), the grant becomes an orphan: the backend request stays
-//   held until mem_ready, which is then swallowed (no wr_done/rd_done).
-//--------------------------------------------------------------------------
+// External RAM request arbiter
 
 module axi_ext_ram_arbiter (
 
@@ -668,9 +588,7 @@ module axi_ext_ram_arbiter (
 
 endmodule
 
-//--------------------------------------------------------------------------
-//                     AXI Interconnect (top)
-//--------------------------------------------------------------------------
+// AXI Interconnect (top)
 
 `include "soc_pkg.vh"
 
@@ -722,7 +640,6 @@ module axi_interconnect #(
     output wire [31:0] read_addr,
 
     // External data RAM -> cache_top cpu_* (tie ext_ram_rdata/ext_ram_ready
-    // to 0 when ENABLE_EXT_RAM = 0). ext_ram_addr = bus address - EXT_RAM_BASE.
     output wire        ext_ram_read,
     output wire        ext_ram_write,
     output wire [31:0] ext_ram_addr,

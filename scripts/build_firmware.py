@@ -1,19 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Build the main 1000-sample Timer/FIR IRQ firmware for rvcore32_pipeline_soc.
-
-  python scripts/build_firmware.py
-  python scripts/build_firmware.py --firmware fir_timer_1000_stress
-
-Sources: firmware/fir_timer_1000.c, fir_timer_isr.h, soc_mmio.h,
-fir_1000_data.h, startup_irq.S and linker_irq.ld.
-Outputs: firmware/build/fir_timer_1000/{program.mem,data.mem,symbols.mem},
-plus ELF, disassembly, map and build report. The stress variant uses the same
-sources with PERIOD=100 and a separate output directory.
-
-The builder checks ELF layout, IMEM/DMEM bounds and every instruction against
-the CPU's supported RV32I subset before emitting memory images.
-"""
+'Build the main 1000-sample Timer/FIR IRQ firmware for rvcore32_pipeline_soc.'
 
 import argparse
 import os
@@ -61,11 +48,7 @@ CFLAGS = [
 LDFLAGS = ["-Wl,--gc-sections", "-Wl,--build-id=none"]
 
 
-# =============================================================================
 # Tập lệnh CPU giải mã ĐÚNG (đọc từ control_unit / alu_control / immediate_generator
-# trong rtl/CPU/cpu.v và nhánh rẽ trong rtl/cpu_soc.v). Lệnh RV32I khác KHÔNG bị CPU
-# báo lỗi mà chạy SAI âm thầm, nên phải chặn ở đây.
-# =============================================================================
 UNSUPPORTED_REASON = {
     ("LOAD", 0b000): "LB: CPU chạy mọi load như LW (không tách byte/mở rộng dấu)",
     ("LOAD", 0b001): "LH: CPU chạy mọi load như LW",
@@ -122,9 +105,7 @@ def check_instruction(word):
     return f"opcode 0b{op:07b} CPU không giải mã"
 
 
-# =============================================================================
 # ELF32 tối giản (chỉ cần header, section header, symtab)
-# =============================================================================
 class Elf:
     def __init__(self, path):
         self.data = data = Path(path).read_bytes()

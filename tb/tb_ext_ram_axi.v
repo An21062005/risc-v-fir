@@ -2,46 +2,7 @@
 `include "soc_pkg.vh"
 `include "sdram_pkg.vh"
 
-//======================================================================
 // tb_ext_ram_axi : kiểm RAM dữ liệu ngoài qua axi_interconnect (cấu hình B/C)
-//======================================================================
-// Kết quả chạy: docs/RTL_FIX_VERIFICATION.md.
-//
-// DUT: axi_interconnect #(ENABLE_EXT_RAM=1) (FSM chốt/giữ yêu cầu + arbiter)
-//      -> cache_top #(USE_CACHE) cpu_* (cache_controller hoặc bypass ->
-//         cache_dma_arbiter -> sdram_top/sdram_model)
-//      + interrupt_axi_wrapper (MMIO thật để kiểm MMIO không đi qua cache).
-//      FIR/Timer chỉ là hằng số ở cổng rdata (không cần .dat).
-// Test này không có CPU; ngắt Timer khi CPU chờ RAM có trong tb_cpu_bus.v.
-//
-// Tham số: USE_CACHE = 0 (cấu hình B) / 1 (cấu hình C). Plusarg +seed=N.
-//
-// Kiểm:
-//   T0 yêu cầu đầu tiên tới lúc SDRAM còn init; đọc đầu tiên sau reset là
-//      miss (valid bit đã reset) - cấu hình C
-//   T1 ranh giới ánh xạ: 0,4,0x3FC,0x400,0x404,0x7FC,0x800,0x8000,0xFFF8,
-//      0xFFFC - giá trị khác nhau, đọc lại, kiểm vị trí halfword trong model
-//   T2 quét liên tục 0x000-0x80F (qua 2 ranh giới row) ghi rồi đọc lại
-//   T3 cache: 4 word/line khác nhau, read miss/refill, read hit, write hit,
-//      write miss (no-allocate), thay line cùng index khác tag; dữ liệu backend
-//      đúng ngay khi BVALID (write-through). Số giao dịch backend được so với
-//      mô hình cache trong TB (B: luôn 1/op; C: hit 0, miss 4, ghi 1)
-//   T4 yêu cầu đúng lúc refresh_request = 1; refresh vẫn chạy định kỳ
-//   T5 mỗi giao dịch AXI tới RAM: đúng 1 yêu cầu (sườn lên cpu_read/
-//      cpu_write tới cache_top), đúng 1 done; addr/wdata giữ ổn định khi
-//      chờ; cpu_ready chỉ tới khi arbiter đang phục vụ một yêu cầu
-//   T6 backpressure ngẫu nhiên BREADY/RREADY + protocol checker
-//   T7 WSTRB khác 1111 / địa chỉ lệch -> SLVERR, không ghi backend
-//   T8 MMIO (interrupt ENABLE, FIR, Timer) không tạo giao dịch backend
-//   T9 ghi và đọc RAM cùng lúc trên 2 kênh -> tuần tự hóa, không mất yêu cầu
-//
-// Chạy: xem rtl/Memory/README.md mục 8. Ví dụ cấu hình C:
-//   vlog +incdir+rtl/packages rtl/AXI/AXI_Interconnect.v \
-//        rtl/Peripherals/interrupt_axi_wrapper.v -f rtl/filelist_ext_ram_sim.f \
-//        +incdir+tb tb/tb_ext_ram_axi.v
-//   (rtl/filelist_ext_ram_sim.f = rtl/Memory/cache_controller.v + sdram.v)
-//   vsim -c tb_ext_ram_axi -GUSE_CACHE=1 +seed=7 -do "run -all; quit -f"
-//======================================================================
 
 module tb_ext_ram_axi;
 
@@ -62,9 +23,7 @@ module tb_ext_ram_axi;
 
     integer errors, checks, seed, max_bp;
 
-    //------------------------------------------------------------
     // AXI signals
-    //------------------------------------------------------------
 
     reg  [31:0] s_axi_awaddr;  reg s_axi_awvalid; wire s_axi_awready;
     reg  [31:0] s_axi_wdata;   reg [3:0] s_axi_wstrb; reg s_axi_wvalid; wire s_axi_wready;
@@ -72,9 +31,7 @@ module tb_ext_ram_axi;
     reg  [31:0] s_axi_araddr;  reg s_axi_arvalid; wire s_axi_arready;
     wire [31:0] s_axi_rdata;   wire [1:0] s_axi_rresp; wire s_axi_rvalid; reg s_axi_rready;
 
-    //------------------------------------------------------------
     // DUT
-    //------------------------------------------------------------
 
     wire [31:0] write_addr, write_data, read_addr;
     wire        timer_wr_en, timer_rd_en, interrupt_wr_en, interrupt_rd_en, fir_wr_en, fir_rd_en;
@@ -115,12 +72,9 @@ module tb_ext_ram_axi;
         .cpu_wdata(ext_ram_wdata), .cpu_rdata(ext_ram_rdata), .cpu_ready(ext_ram_ready)
     );
 
-    //------------------------------------------------------------
     // Monitors (pre-edge values at posedge)
-    //------------------------------------------------------------
 
     // n_wr_en / n_rd_en: rising edges of cpu_write / cpu_read at cache_top
-    // (= requests issued to memory); *_done: completions seen by the FSMs.
     integer n_wr_en, n_rd_en, n_wr_done, n_rd_done;
     integer n_be_rd, n_be_wr, n_refresh;
     reg        prev_rd, prev_wr;
@@ -160,9 +114,7 @@ module tb_ext_ram_axi;
         prev_wdata = ext_ram_wdata;
     end
 
-    //------------------------------------------------------------
     // Shadow memory, backdoor, TB cache model
-    //------------------------------------------------------------
 
     reg [31:0] shadow [0:WORDS-1];
     reg        tbc_valid [0:63];
@@ -188,9 +140,7 @@ module tb_ext_ram_axi;
 
     `include "axi_lite_bfm.vh"
 
-    //------------------------------------------------------------
     // RAM access wrappers with all per-transaction checks
-    //------------------------------------------------------------
 
     task ram_write;
         input [31:0] off;
@@ -238,9 +188,7 @@ module tb_ext_ram_axi;
         end
     endtask
 
-    //------------------------------------------------------------
     // Test sequence
-    //------------------------------------------------------------
 
     reg [31:0] r;
     reg [1:0]  resp;
@@ -376,7 +324,6 @@ module tb_ext_ram_axi;
         check_eq(n_wr_en, n_wr_done, "every RAM write completed once");
         check_eq(n_rd_en, n_rd_done, "every RAM read completed once");
         // the raw axi_read(0) above allocated line 0 (tag 0) in config C;
-        // the writes to 0x3000.. (same index, other tag) are no-allocate
         tbc_valid[0] = 1'b1;
         tbc_tag[0]   = 22'd0;
         for (k = 0; k < 8; k = k + 1)

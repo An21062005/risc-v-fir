@@ -1,44 +1,6 @@
 `timescale 1ns/1ps
 
-//======================================================================
-// rvcore32_pipeline_soc : lõi RV32I 5 giai đoạn có cổng bus và ngắt
-//======================================================================
-// Dựa trên rvcore32_pipeline_top (rtl/CPU/cpu.v, tiny-riscv-soc, MIT).
-// Bản gốc giữ nguyên; module này tái sử dụng các submodule của nó:
-//   program_counter, instruction_memory, data_memory, decoder,
-//   register_file, control_unit, immediate_generator, alu, alu_control,
-//   wb_stage, if_id_reg/id_ex_reg/ex_mem_reg/mem_wb_reg (có cổng hold),
-//   forwarding_unit, hazard_detection_unit, flush_unit.
-//
-// Thêm mới so với bản gốc:
-// 1) Chia địa chỉ ở giai đoạn MEM:
-//      addr[31:30] == 2'b01 -> đi bus, bus_addr = {2'b00, addr[29:0]}
-//                              (CPU thấy ngoại vi ở 0x4000_0000 + offset bus)
-//      còn lại            -> bộ nhớ dữ liệu nội bộ 256 từ (addr[9:2])
-//    Truy cập bus KHÔNG ghi/đọc bộ nhớ nội bộ (tránh ghi đè bí danh).
-// 2) Dừng khi chờ bus: bus_stall = (bus_rd | bus_wr) & ~bus_ready.
-//    Khi bus_stall = 1: ĐÓNG BĂNG PC và cả 4 thanh ghi pipeline (cổng hold,
-//    ưu tiên cao hơn flush). Dữ liệu đọc từ bus được chốt vào MEM/WB ở cạnh
-//    clock cuối chu kỳ bus_ready = 1 (lúc đó bus_stall = 0).
-//    bus_ready là xung mem_ready 1 chu kỳ của cpu_axi_master.
-// 3) Ngắt tối thiểu (không có CSR đầy đủ):
-//      mepc, in_irq; vector cố định TRAP_VECTOR (mặc định 0x10).
-//      Nhận ngắt (irq_take) khi:
-//        irq && !in_irq && !bus_stall && PCWrite (không có load-use stall)
-//        && không có nhảy/rẽ nhánh được giải quyết ở EX trong chu kỳ này
-//        && lệnh ở ID KHÔNG phải branch/jal/jalr/mret.
-//      (Điều kiện cuối là bổ sung so với prompt: lệnh điều khiển ở ID sẽ đổi
-//       PC ở chu kỳ sau và ghi đè lên TRAP_VECTOR, làm mất ISR.)
-//      Khi nhận: mepc = pc (lệnh kế tiếp chưa được nạp vào IF/ID),
-//        lệnh đang nạp bị thay bằng NOP (flush IF/ID), pc = TRAP_VECTOR,
-//        in_irq = 1. Các lệnh cũ hơn đang ở ID/EX/MEM/WB chạy tiếp bình thường.
-//      mret (32'h30200073) giải mã ở ID: pc = mepc, flush IF/ID (lệnh nạp
-//        sai sau mret), in_irq = 0. control_unit không biết opcode SYSTEM nên
-//        mret đi tiếp trong pipeline như một NOP.
-//
-// Directed CPU/bus regression: docs/RTL_FIX_VERIFICATION.md.
-// ISA vẫn là tập con; regression không thay thế kiểm chứng ISA đầy đủ.
-//======================================================================
+// CPU RV32I 5 tầng; địa chỉ 0x40000000 đi bus, pipeline giữ khi chờ bus, IRQ không lồng.
 
 module rvcore32_pipeline_soc #(
     parameter [31:0] TRAP_VECTOR = 32'h0000_0010
@@ -58,9 +20,7 @@ module rvcore32_pipeline_soc #(
 
     localparam [31:0] MRET_INSTR = 32'h3020_0073;
 
-    //------------------------------------------------------------
     // IF
-    //------------------------------------------------------------
     wire [31:0] pc;
     wire [31:0] next_pc;
     wire [31:0] instruction;
@@ -138,9 +98,7 @@ module rvcore32_pipeline_soc #(
     wire        PCWrite, IF_ID_Write, ControlMuxSelect;
     wire        flush_if_id, flush_id_ex;
 
-    //------------------------------------------------------------
     // MEM stage: address split, bus port, stall
-    //------------------------------------------------------------
     wire        is_bus_addr = (ex_mem_alu_result[31:30] == 2'b01);
 
     assign bus_rd    = ex_mem_MemRead  &  is_bus_addr;
@@ -155,9 +113,7 @@ module rvcore32_pipeline_soc #(
     wire [31:0] dmem_rdata;
     wire [31:0] mem_rdata  = is_bus_addr ? bus_rdata : dmem_rdata;
 
-    //------------------------------------------------------------
     // Interrupt / mret control
-    //------------------------------------------------------------
     reg  [31:0] mepc;
     reg         in_irq;
 
@@ -181,9 +137,7 @@ module rvcore32_pipeline_soc #(
         end
     end
 
-    //------------------------------------------------------------
     // Next PC (priority: EX redirect > mret > interrupt > pc+4)
-    //------------------------------------------------------------
     assign next_pc =
            id_ex_JumpReg   ? ex_jalr_target   :
            id_ex_Jump      ? ex_jump_target   :
@@ -217,9 +171,7 @@ module rvcore32_pipeline_soc #(
         .instr_out(if_id_instruction)
     );
 
-    //------------------------------------------------------------
     // ID
-    //------------------------------------------------------------
     decoder DEC (
         .instruction(if_id_instruction),
         .opcode(opcode),
@@ -321,9 +273,7 @@ module rvcore32_pipeline_soc #(
         .ALUOp_out(id_ex_ALUOp)
     );
 
-    //------------------------------------------------------------
     // EX
-    //------------------------------------------------------------
     assign forwarded_A =
            (ForwardA == 2'b00) ? id_ex_read_data1  :
            (ForwardA == 2'b10) ? ex_mem_alu_result :
@@ -392,9 +342,7 @@ module rvcore32_pipeline_soc #(
         .pc_plus_4_out(ex_mem_pc_plus_4)
     );
 
-    //------------------------------------------------------------
     // MEM
-    //------------------------------------------------------------
     data_memory DMEM (
         .clk(clk),
         .mem_read(dmem_read),
@@ -426,9 +374,7 @@ module rvcore32_pipeline_soc #(
         .pc_plus_4_out(mem_wb_pc_plus_4)
     );
 
-    //------------------------------------------------------------
     // WB
-    //------------------------------------------------------------
     wb_stage WB (
         .ALU_Result(mem_wb_alu_result),
         .MemoryData(mem_wb_mem_data),
@@ -439,9 +385,7 @@ module rvcore32_pipeline_soc #(
         .WriteBackData(WriteBackData)
     );
 
-    //------------------------------------------------------------
     // Forwarding, hazard detection, flush (unchanged units)
-    //------------------------------------------------------------
     forwarding_unit FU (
         .id_ex_rs1(id_ex_rs1),
         .id_ex_rs2(id_ex_rs2),

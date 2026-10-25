@@ -1,36 +1,6 @@
 `timescale 1ns/1ps
 
-//======================================================================
 // tb_fir11_vectors : kiểm chứng fir11_wrapper + FIR11 HLS thật bằng 6 bộ
-//                    vector tham chiếu trong data_test/fir_test/output/
-//======================================================================
-// Mỗi test <name> (1000 mẫu, số nguyên thập phân có dấu, 1 mẫu/dòng):
-//   <VEC_DIR>/<name>/input.dat     x[n]
-//   <VEC_DIR>/<name>/expected.dat  y[n] = sum c[k]*x[n-k], lịch sử = 0, wrap 32-bit
-//   -> ghi <OUT_DIR>/<name>/actual.dat (DATA_OUT đọc được, cùng định dạng)
-//
-// Trình tự mỗi test:
-//   1. Xả lịch sử: 10 giao dịch x = 0 qua wrapper (kiểm giao thức, bỏ output).
-//      KHÔNG dựa vào ap_rst: shift_reg của IP nằm trong RAM, ap_rst không xóa.
-//      Kiểm thêm (white-box) ram[0..9] của shift_reg_U = 0 sau khi xả.
-//   2. Mỗi mẫu = một giao dịch hoàn chỉnh (fir_txn):
-//        STATUS == IDLE (không busy/done/overrun)  -> không gửi khi BUSY
-//        ghi DATA_IN; đúng 1 lần wrapper nhận mẫu
-//        STATUS: busy=1, done=0
-//        poll STATUS tới done=1 (timeout MAX_POLL lần đọc); khi done: busy=0,
-//          overrun=0, irq=1; đúng 1 ap_done của IP cho giao dịch này
-//        đọc DATA_OUT; irq về 0
-//      Output ghép với input theo giao dịch vừa hoàn tất (không dò độ trễ).
-//      Monitor độc lập chốt (x_q, y) ở chu kỳ y_ap_vld để đối chiếu cặp.
-//   3. So sánh chính xác 32 bit với expected.dat; sai -> in test, n, x, exp, act.
-//
-// Plusargs: +VEC_DIR=<thư mục output của generator>  (mặc định ../../data_test/fir_test/output)
-//           +OUT_DIR=<thư mục ghi actual.dat>          (mặc định .; cần có sẵn <OUT_DIR>/<name>/)
-// Hai file ROM/RAM .dat của HLS phải nằm ở thư mục làm việc của simulator
-// (scripts/prep_fir11_dat.sh hoặc scripts/run_rtl_tests.py tự chép).
-//
-// Chạy: python scripts/run_rtl_tests.py --vivado-root <Vivado> --tests tb_fir11_vectors
-//======================================================================
 
 module tb_fir11_vectors;
 
@@ -51,9 +21,7 @@ module tb_fir11_vectors;
     localparam MAX_SHOW    = 20;         // số dòng lệch in chi tiết mỗi test
     localparam CLK_PERIOD  = 10;
 
-    //------------------------------------------------------------
     // DUT
-    //------------------------------------------------------------
 
     reg         clk;
     reg         rst_n;
@@ -80,9 +48,7 @@ module tb_fir11_vectors;
     initial clk = 1'b0;
     always #(CLK_PERIOD/2) clk = ~clk;
 
-    //------------------------------------------------------------
     // Scoreboard helpers (protocol checks)
-    //------------------------------------------------------------
 
     integer errors;
     integer checks;
@@ -100,9 +66,7 @@ module tb_fir11_vectors;
         end
     endtask
 
-    //------------------------------------------------------------
     // Monitors (hierarchical refs into wrapper / HLS IP)
-    //------------------------------------------------------------
 
     integer    n_accept;       // DATA_IN accepted by the wrapper
     integer    n_ip_done;      // ap_done of the IP while ap_rst = 0
@@ -125,9 +89,7 @@ module tb_fir11_vectors;
         end
     end
 
-    //------------------------------------------------------------
     // Bus model (same timing as tb_fir11_wrapper / axi_interconnect)
-    //------------------------------------------------------------
 
     task bus_write;
         input [31:0] addr;
@@ -165,9 +127,7 @@ module tb_fir11_vectors;
         end
     endtask
 
-    //------------------------------------------------------------
     // One complete FIR transaction through the wrapper registers
-    //------------------------------------------------------------
 
     reg [31:0] txn_y;
     reg        txn_ok;           // 0: timeout / protocol failure in this txn
@@ -228,9 +188,7 @@ module tb_fir11_vectors;
         end
     endtask
 
-    //------------------------------------------------------------
     // Vector files
-    //------------------------------------------------------------
 
     reg [8*512-1:0] vec_dir;
     reg [8*512-1:0] out_dir;
@@ -265,9 +223,7 @@ module tb_fir11_vectors;
         end
     endtask
 
-    //------------------------------------------------------------
     // Run one vector test
-    //------------------------------------------------------------
 
     integer total_match;
     integer total_samples;
@@ -349,9 +305,7 @@ module tb_fir11_vectors;
         end
     endtask
 
-    //------------------------------------------------------------
     // Test sequence
-    //------------------------------------------------------------
 
     integer i;
     integer c_exp [0:TAPS-1];

@@ -1,24 +1,6 @@
 `timescale 1ns/1ps
 
-//======================================================================
 // tb_cpu_irq_c4 : C4 (ACK right before MRET) + I1 replayed on the CPU
-//======================================================================
-// Real soc_top (A, or B/C via EXT_RAM/USE_CACHE). Directed images assembled by
-// scripts/run_rtl_tests.py from tb/asm/irq_dir.S (Vivado RISC-V GCC, -Ttext=0):
-//   c4a_N : ISR = sw ACK(FIR) ; N x nop ; mret               (ENABLE = FIR)
-//   c4p_N : as c4a_N, main loop padded with 24 addi (no branch in ID at bus_ready)
-//   c4b_N : ISR = lw STATUS ; sw ACK(STATUS) ; N x nop ; mret (ENABLE = FIR|Timer)
-//   i1_N  : ISR = sw DATA_IN ; N x nop ; sw ACK(FIR) ; mret   (ENABLE = FIR)
-// main: ENABLE, DATA_IN once, then `addi ; j` forever.
-// Checks:
-//   C4-A  one FIR event -> exactly 1 ISR entry, 1 ACK, back in main loop; irq low
-//         >= 1 cycle before the ACK store's bus_ready (margin for `sw ACK; mret`).
-//   C4-B  FIR event + forced 1-cycle Timer pulse at offset k = 0..MAX_K after the
-//         first irq_take (before / at / between ACK and MRET / after):
-//         exactly 2 ISR entries, 1 ACK id0 + 1 ACK id1, nothing left pending.
-//   I1    ISR keeps the FIR stream going: every completion must produce an ISR
-//         entry; lost = completion edge never serviced (stream stops).
-//======================================================================
 
 module tb_cpu_irq_c4;
     parameter MAX_K = 40;
@@ -143,7 +125,6 @@ module tb_cpu_irq_c4;
             $display("INFO I1-CPU N=%0d: FIR completions=%0d ISR entries=%0d ack1=%0d pending=%b fir_irq=%b ISR DATA_IN wr_en@%0d -> 1st ACK pulse@%0d (gap %0d clk)",
                      n, n_fir_done, n_take, n_ack1, pending, fir_irq, t_firwr2, t_ack, t_ack - t_firwr2);
             // lost = stream stalled: a completion is unserviced and can no longer raise pending
-            // (one completion may legitimately be pending/in service at the cut-off)
             if (n_take < n_fir_done - 1 ||
                 (n_take < n_fir_done && pending[1] === 1'b0 && fir_irq === 1'b1 && !dut.u_cpu.in_irq)) begin
                 i1_lost_n = i1_lost_n + 1;

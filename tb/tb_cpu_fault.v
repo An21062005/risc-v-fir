@@ -1,26 +1,6 @@
 `timescale 1ns/1ps
 
-//======================================================================
 // tb_cpu_fault : AXI error responses and ext-RAM timeout on the real SoC (A1/A2)
-//======================================================================
-// soc_top ENABLE_EXT_RAM = 1 (B: USE_CACHE = 0, C: USE_CACHE = 1). Programs
-// assembled with the Vivado RISC-V GCC (-Ttext=0), sources in comments.
-//   Part 1  MMIO SLVERR (unaligned FIR CTRL write/read) and DECERR (unmapped
-//           0x400): CPU completes every access (no trap), failed read returns 0,
-//           nothing is written; software reads BUSERR / BUSERR_ADDR (first error,
-//           overflow), W1C clear.
-//   Part 2  ext-RAM timeout + orphan: the TB hides the backend request
-//           (cache_top arb_mem_read/write forced 0) when the CPU reads offset
-//           0x100, so the backend really answers late:
-//             - that read ends with SLVERR after EXT_RAM_TIMEOUT cycles, data 0;
-//             - the following write is never granted (orphan busy), times out
-//               (SLVERR) and must NOT reach the memory;
-//             - release: the backend completes the orphan, which is swallowed
-//               (no rd_done, no CPU completion); later accesses return correct
-//               data with OKAY; exactly one CPU completion per access.
-//   Part 3  backend never answers: the CPU still makes progress after the
-//           timeout; reset aborts the stuck backend request.
-//======================================================================
 module tb_cpu_fault;
     parameter USE_CACHE = 0;
     localparam TIMEOUT = 1024;                 // soc_top default EXT_RAM_TIMEOUT

@@ -17,6 +17,7 @@ firmware/build/
 /outfeed/*41.py
 # Phase 5: Vivado synthesis output of scripts/run_vivado_synth.py (default outfeed/synth_<cfg>/)
 /outfeed/synth_*/
+/outfeed/block_design/
 # File phụ của XSim (xvlog.pb, xelab.pb, xsim_*.backup.*) nếu chạy tay ngoài outfeed/
 *.pb
 *.backup.*

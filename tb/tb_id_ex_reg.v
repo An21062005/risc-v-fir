@@ -1,23 +1,6 @@
 `timescale 1ns/1ps
 
-//======================================================================
-// tb_id_ex_reg : unit test of id_ex_reg (rtl/CPU/Pipeline_Registers.v)
-//======================================================================
-// Contract (priority high -> low):
-//   rst = 1             : asynchronous clear, takes effect without a clock edge
-//   flush && !hold      : synchronous clear at the clock edge
-//   !hold               : load all inputs at the clock edge
-//   hold = 1            : keep everything, even when flush = 1
-// Checks:
-//   1. directed corners: rst/flush/hold combinations, rst together with
-//      flush+hold, flush during hold then hold released, rst released
-//   2. flush or hold changing between edges never changes outputs
-//      (flush is synchronous); rst rising between edges clears at once
-//   3. 20000 random cycles against an independent model, random async
-//      rst pulses placed between edges
-// Also used with the post-synthesis funcsim netlist (top glbl): the test
-// starts after the 100 ns GSR pulse.
-//======================================================================
+// Kiểm tra id_ex_reg: reset bất đồng bộ, hold ưu tiên flush và 20000 chu kỳ ngẫu nhiên.
 
 module tb_id_ex_reg;
 
@@ -62,9 +45,7 @@ module tb_id_ex_reg;
                    RegWrite_o, MemRead_o, MemWrite_o, MemToReg_o, Branch_o,
                    Jump_o, JumpReg_o, isAUIPC_o, ALUSrc_o, isLUI_o, ALUOp_o};
 
-    //------------------------------------------------------------
     // Independent reference model
-    //------------------------------------------------------------
     reg [W-1:0] model;
     always @(posedge clk or posedge rst) begin
         if (rst)                 model <= {W{1'b0}};
@@ -115,9 +96,7 @@ module tb_id_ex_reg;
         din = {W{1'b0}};
         #200;                                  // past glbl GSR (netlist run)
 
-        //--------------------------------------------------------
         // 1. Directed corners
-        //--------------------------------------------------------
         pattern = rnd(0);
         cycle(1, 0, 0, pattern); check(0, "rst=1 clears");
         cycle(1, 1, 1, pattern); check(0, "rst=1 with hold=1 flush=1 clears");
@@ -129,10 +108,7 @@ module tb_id_ex_reg;
         cycle(0, 1, 1, pattern); check(~pattern, "flush+hold again keeps");
         cycle(0, 0, 0, pattern); check(pattern, "hold released without flush loads");
 
-        //--------------------------------------------------------
         // 2. Edges between clocks
-        //--------------------------------------------------------
-        // flush rises mid-cycle (hold = 0): no change before the edge
         @(negedge clk); hold = 0; flush = 0; din = ~pattern;
         #2 flush = 1;
         #1 check(pattern, "flush mid-cycle is not asynchronous");
@@ -151,9 +127,7 @@ module tb_id_ex_reg;
         #0.5 check(0, "stays clear after rst pulse until next edge");
         @(posedge clk); #1 check(pattern, "load after async rst pulse");
 
-        //--------------------------------------------------------
         // 3. Random against model, including async rst pulses
-        //--------------------------------------------------------
         for (i = 0; i < 20000; i = i + 1) begin
             @(negedge clk);
             din   = rnd(0);

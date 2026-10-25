@@ -1,13 +1,4 @@
 // axi_lite_bfm.vh : AXI4-Lite master BFM + protocol checker (include trong module TB)
-// Dùng chung cho các test AXI; kết quả chạy: docs/RTL_FIX_VERIFICATION.md.
-//
-// Module TB phải khai báo trước khi include:
-//   clk, các reg/wire s_axi_* (awaddr, awvalid, awready, wdata, wstrb, wvalid,
-//   wready, bresp, bvalid, bready, araddr, arvalid, arready, rdata, rresp,
-//   rvalid, rready), integer errors, checks, seed, max_bp (độ trễ ready ngẫu
-//   nhiên tối đa, 0 = không backpressure).
-// Quy ước thời gian: TB chỉ đổi tín hiệu ở negedge; DUT đổi ở posedge, nên
-// giá trị đọc ở negedge = giá trị ngay trước posedge kế tiếp.
 
 task check_eq;
     input [31:0]  got;

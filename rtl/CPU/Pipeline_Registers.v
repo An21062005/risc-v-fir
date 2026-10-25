@@ -1,17 +1,5 @@
 `timescale 1ns/1ps
-//------------------------------------------------------------------
-// Bản sao từ tiny-riscv-soc (MIT). Thay đổi trong riscv-soc-fir-hls:
-//   Thêm cổng `hold` cho if_id_reg, id_ex_reg, ex_mem_reg, mem_wb_reg.
-//   id_ex_reg: tách reset bất đồng bộ và flush đồng bộ thành hai nhánh
-//   (trước đây gộp `rst || (flush && !hold)`), hành vi không đổi.
-//   hold = 1: thanh ghi giữ nguyên giá trị, kể cả khi có flush
-//   (dùng để đóng băng toàn bộ pipeline khi CPU chờ bus ngoại vi).
-//   Verilog-2001 không có giá trị mặc định cho cổng: nơi gọi cũ phải
-//   nối .hold(1'b0) để giữ nguyên hành vi gốc (để hở -> hold = z -> sai).
-//------------------------------------------------------------------
-//--------------------------------------------------------------------------
-//             Pipeline Registers
-//--------------------------------------------------------------------------
+// Thanh ghi pipeline và điều khiển hazard/forwarding/flush; hold ưu tiên hơn flush.
 
 module if_id_reg(
 
@@ -68,9 +56,7 @@ module id_ex_reg(
     input wire rst,
     input flush,
 
-    //------------------------------------------------
     // Data Signals
-    //------------------------------------------------
 
     input wire [31:0] pc_in,
     input wire [31:0] read_data1_in,
@@ -84,9 +70,7 @@ module id_ex_reg(
     input wire [2:0] funct3_in,
     input wire [6:0] funct7_in,
 
-    //------------------------------------------------
     // Control Signals
-    //------------------------------------------------
 
     input wire RegWrite_in,
     input wire MemRead_in,
@@ -106,9 +90,7 @@ module id_ex_reg(
    
     
 
-    //------------------------------------------------
     // Outputs
-    //------------------------------------------------
 
     output reg [31:0] pc_out,
     output reg [31:0] read_data1_out,
@@ -140,9 +122,6 @@ module id_ex_reg(
 );
 
 // riscv-soc-fir-hls: rst (asynchronous) and flush (synchronous) are separate
-// branches, as in if_id_reg. Priority unchanged: rst > hold > flush > load.
-// The former `if (rst || (flush && !hold))` put a synchronous term in the
-// async-reset condition (non-standard template).
 always @(posedge clk or posedge rst) begin
 
     if (rst) begin
@@ -251,18 +230,14 @@ module ex_mem_reg(
     input hold,              // thêm mới: 1 = giữ nguyên (đóng băng khi chờ bus)
     input rst,
 
-    //--------------------------------------------------
     // Data Inputs
-    //--------------------------------------------------
 
     input [31:0] alu_result_in,
     input [31:0] write_data_in,
 
     input [4:0] rd_in,
 
-    //--------------------------------------------------
     // Control Inputs
-    //--------------------------------------------------
 
     input RegWrite_in,
     input MemRead_in,
@@ -273,18 +248,14 @@ module ex_mem_reg(
 
   input [31:0] pc_plus_4_in,
 
-    //--------------------------------------------------
     // Data Outputs
-    //--------------------------------------------------
 
     output reg [31:0] alu_result_out,
     output reg [31:0] write_data_out,
 
     output reg [4:0] rd_out,
 
-    //--------------------------------------------------
     // Control Outputs
-    //--------------------------------------------------
 
     output reg RegWrite_out,
     output reg MemRead_out,
@@ -349,18 +320,14 @@ module mem_wb_reg(
     input hold,              // thêm mới: 1 = giữ nguyên (đóng băng khi chờ bus)
     input rst,
 
-    //--------------------------------------------------
     // Data Inputs
-    //--------------------------------------------------
 
     input [31:0] mem_data_in,
     input [31:0] alu_result_in,
 
     input [4:0] rd_in,
 
-    //--------------------------------------------------
     // Control Inputs
-    //--------------------------------------------------
 
     input MemToReg_in,
     input RegWrite_in,
@@ -369,18 +336,14 @@ module mem_wb_reg(
 
     input [31:0] pc_plus_4_in,
 
-    //--------------------------------------------------
     // Data Outputs
-    //--------------------------------------------------
 
     output reg [31:0] mem_data_out,
     output reg [31:0] alu_result_out,
 
     output reg [4:0] rd_out,
 
-    //--------------------------------------------------
     // Control Outputs
-    //--------------------------------------------------
 
     output reg MemToReg_out,
     output reg RegWrite_out,
@@ -453,16 +416,12 @@ module forwarding_unit(
 
 always @(*) begin
 
-    //--------------------------------------------------
     // Default
-    //--------------------------------------------------
 
     ForwardA = 2'b00;
     ForwardB = 2'b00;
 
-    //--------------------------------------------------
     // EX Hazard
-    //--------------------------------------------------
 
     if (ex_mem_RegWrite &&
         (ex_mem_rd != 0) &&
@@ -476,9 +435,7 @@ always @(*) begin
 
         ForwardB = 2'b10;
 
-    //--------------------------------------------------
     // MEM Hazard
-    //--------------------------------------------------
 
     if (mem_wb_RegWrite &&
         (mem_wb_rd != 0) &&
@@ -521,17 +478,13 @@ module hazard_detection_unit(
 
 always @(*) begin
 
-    //-----------------------------------------
     // Default: normal execution
-    //-----------------------------------------
 
     PCWrite         = 1'b1;
     IF_ID_Write     = 1'b1;
     ControlMuxSelect = 1'b0;
 
-    //-----------------------------------------
     // Load-use hazard
-    //-----------------------------------------
 
     if ( id_ex_MemRead &&
         (id_ex_rd != 5'd0) &&

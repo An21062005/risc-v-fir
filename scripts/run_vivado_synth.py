@@ -1,16 +1,4 @@
-"""Synthesize soc_top with Vivado (batch, non-project) and check the results.
-
-  python scripts/run_vivado_synth.py --vivado-root D:/vivado/2026.1/Vivado [--impl] [--cfg C]
-                                     [--firmware fir_timer_1000] [--output outfeed/synth_<cfg>]
-
-Steps: build the firmware image (scripts/build_firmware.py -> <output>/fw), run
-fpga/synth_soc.tcl (top soc_top, fpga/soc_top.xdc 100 MHz clock), then check vivado.log:
-  - every memory image ($readmemh: program.mem, data.mem, both FIR11 .dat) read successfully (F3)
-  - no inferred latch (Synth 8-327), no CRITICAL WARNING / ERROR
-  - with --impl: post-route WNS/TNS/WHS of the 100 MHz clock (timing PASS needs WNS >= 0)
-Prints a summary (LUT/FF/BRAM/DSP, warnings by ID). No bitstream is generated:
-the XDC carries no pin/IOSTANDARD constraints because the board is not specified.
-"""
+'Synthesize soc_top with Vivado (batch, non-project) and check the results.'
 
 import argparse
 import collections

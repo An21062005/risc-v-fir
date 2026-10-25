@@ -1,9 +1,4 @@
-/*
- * CPU-visible register map shared by the FIR application and staged tests.
- * See rtl/packages/soc_pkg.vh and the peripheral register decoders.
- * The CPU strips address bits [31:30] before issuing a bus request:
- * CPU 0x40000200 -> bus 0x00000200. Use aligned 32-bit lw/sw only.
- */
+/* Địa chỉ thanh ghi nhìn từ CPU; chỉ truy cập MMIO bằng word 32-bit căn hàng. */
 #ifndef SOC_MMIO_H
 #define SOC_MMIO_H
 

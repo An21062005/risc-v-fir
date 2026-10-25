@@ -1,20 +1,7 @@
 `timescale 1ns/1ps
 `include "soc_pkg.vh"
 
-//======================================================================
 // tb_ext_ram_cfgA : cấu hình A (ENABLE_EXT_RAM = 0) giữ hành vi cũ
-//======================================================================
-// Kết quả chạy: docs/RTL_FIX_VERIFICATION.md.
-// DUT: axi_interconnect #(ENABLE_EXT_RAM=0) + interrupt_axi_wrapper; cổng
-// ext_ram_rdata/ext_ram_ready buộc 0 như soc_top (g_no_ext_ram). Kiểm:
-//   - 0x0001_0000 / 0x0001_FFFC: đọc ra 0, RRESP DECERR; ghi BRESP DECERR (A1);
-//     không có yêu cầu ext_ram_read / ext_ram_write (vùng không map như trước)
-//   - MMIO interrupt ENABLE R/W, FIR/Timer rdata, mỗi lần đọc FIR đúng 1
-//     xung fir_rd_en, mỗi lần ghi FIR đúng 1 xung fir_wr_en
-// Chạy: vlog +incdir+rtl/packages +incdir+tb rtl/AXI/AXI_Interconnect.v \
-//         rtl/Peripherals/interrupt_axi_wrapper.v tb/tb_ext_ram_cfgA.v
-//       vsim -c tb_ext_ram_cfgA -do "run -all; quit -f"
-//======================================================================
 
 module tb_ext_ram_cfgA;
 

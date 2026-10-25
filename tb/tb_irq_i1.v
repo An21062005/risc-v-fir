@@ -1,27 +1,7 @@
 `timescale 1ns/1ps
 `include "interrupt_pkg.vh"
 
-//======================================================================
 // tb_irq_i1 : I1 - FIR IRQ vs. new DATA_IN sent before the old ACK
-//======================================================================
-// Real fir11_wrapper + interrupt_axi_wrapper + interrupt_controller, wired
-// as in soc_top (irq_in = {fir_irq, timer_irq}, timer_irq = 0), driven at
-// the peripheral bus pins (wr_en/rd_en one-cycle pulses).
-//
-// Sequence per case (FIR enabled in ENABLE):
-//   DATA_IN #1 -> done #1 -> pending[1] = 1   (old, not yet ACKed)
-//   DATA_IN #2 at cycle t0 (accept clears done -> fir_irq falls)
-//   ACK(FIR) written at t0 + d, d = 0..MAX_D
-//   wait until done #2 and settle; done #2 is a NEW, unserviced event.
-// Specification: a completion that has not been serviced must stay pending
-// (pending[1] = 1). Lost = pending[1] == 0 while fir_irq (done_q) == 1:
-// the level stays high, so no later rising edge can ever re-arm pending.
-// Reference case (current firmware order): ACK first, then DATA_IN.
-// Scenario P (no duplicate): done #1 pending, software consumes it by polling
-// (DATA_OUT read, no ACK), sends DATA_IN #2; done #2 is then serviced by an ISR
-// (STATUS, ACK, DATA_OUT). Exactly one service -> pending must end at 0.
-// Each ISR-like sequence reads STATUS first (as irq_handler does).
-//======================================================================
 
 module tb_irq_i1;
     parameter MAX_D = 40;

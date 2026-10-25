@@ -1,29 +1,6 @@
 `timescale 1ns/1ps
 
-//======================================================================
 // tb_cpu_flush_hold : ID/EX flush + hold inside the real CPU/SoC
-//======================================================================
-// Real soc_top (ENABLE_EXT_RAM = 1, B or C via USE_CACHE): a bus access in
-// MEM holds the whole pipeline (bus_stall) while the instruction in EX is a
-// taken branch / JAL / JALR, so id_ex_reg sees flush = 1 and hold = 1 at the
-// same time. Program (assembled with the Vivado RISC-V GCC, -Ttext=0):
-//   A  taken BEQ in EX while SW to ext RAM stalls        (flush + hold)
-//   B  JAL in EX while LW from ext RAM stalls             (flush + hold)
-//   C  JALR after a load-use stall on a bus load
-//   C2 JALR in EX while SW stalls; rs1 forwarded from the LW held in WB
-//   D  not-taken BNE in EX while SW stalls               (hold, no flush)
-//   E  backward BNE right after an ext-RAM LW, 5 iterations
-//   F  taken BEQ behind an MMIO read stall, branch behind it in ID
-// Wrong-path instructions write x10 != 0; x10 must never be written != 0.
-// Monitors (every edge, after reset):
-//   - bus_stall at an edge  -> every ID/EX output unchanged across it
-//   - flush && !bus_stall   -> ID/EX cleared at that edge
-//   - no wrong-path write to x10
-//   - coverage of each flush/hold combination listed above
-// Run 1: complete program. Run 2: asynchronous rst_n assertion between
-// edges while flush and hold are both 1 -> ID/EX, IF/ID and PC clear without
-// a clock edge. Run 3: rerun after that abort, same results.
-//======================================================================
 
 module tb_cpu_flush_hold;
 
@@ -50,9 +27,7 @@ module tb_cpu_flush_hold;
         end
     endtask
 
-    //------------------------------------------------------------
     // ID/EX state as seen from the CPU
-    //------------------------------------------------------------
     wire [31:0] idex_pc   = dut.u_cpu.id_ex_pc;
     wire [31:0] idex_rd1  = dut.u_cpu.id_ex_read_data1;
     wire [31:0] idex_rd2  = dut.u_cpu.id_ex_read_data2;
@@ -70,9 +45,7 @@ module tb_cpu_flush_hold;
     wire bus_stall = dut.u_cpu.bus_stall;
     wire flush     = dut.u_cpu.flush_id_ex;
 
-    //------------------------------------------------------------
     // Monitors (values sampled at the edge = state before the edge)
-    //------------------------------------------------------------
     reg         mon_en = 1'b0;
     reg         prev_valid = 1'b0, prev_stall = 1'b0, prev_flush = 1'b0;
     reg [164:0] prev_idex;
@@ -111,9 +84,7 @@ module tb_cpu_flush_hold;
         end
     end
 
-    //------------------------------------------------------------
     // Program
-    //------------------------------------------------------------
     task install;
         begin
             for (i = 0; i < 256; i = i + 1) begin
@@ -207,9 +178,7 @@ module tb_cpu_flush_hold;
 
     initial begin
         #1;
-        //--------------------------------------------------------
         // Run 1
-        //--------------------------------------------------------
         rst_n = 0; repeat (5) @(negedge clk);
         install();
         mon_en = 1; rst_n = 1;
@@ -222,9 +191,7 @@ module tb_cpu_flush_hold;
         ck(cov_nt_hold > 0,    "covered: not-taken branch in EX while held");
         ck(cov_flush_run > 0,  "covered: flush without hold");
 
-        //--------------------------------------------------------
         // Run 2: async reset between edges while flush && hold
-        //--------------------------------------------------------
         rst_n = 0; repeat (5) @(negedge clk);
         install();
         rst_n = 1;
@@ -241,9 +208,7 @@ module tb_cpu_flush_hold;
         repeat (3) @(posedge clk);
         #1 ck(idex === 165'd0 && dut.u_cpu.pc === 32'd0, "held in reset across edges");
 
-        //--------------------------------------------------------
         // Run 3: full program after the abort
-        //--------------------------------------------------------
         @(negedge clk);
         for (i = 0; i < 256; i = i + 1) dut.u_cpu.DMEM.memory[i] = 32'd0;
         rst_n = 1;

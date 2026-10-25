@@ -1,15 +1,6 @@
 `timescale 1ns/1ps
 
-//======================================================================
-// reset_sync : reset synchronizer (S1)
-//======================================================================
-// Asynchronous assert, synchronous release: rst_n_out goes low as soon as
-// rst_n_in goes low (no clock needed, like the original direct reset), and
-// goes high only STAGES rising clk edges after rst_n_in is released, aligned
-// to clk. Every flop in the SoC thus leaves reset on the same edge, outside
-// the release-time (recovery/removal) window of an asynchronous pin.
-// ASYNC_REG keeps the chain together and tells Vivado it is a synchronizer.
-//======================================================================
+// Reset assert bất đồng bộ, release đồng bộ sau STAGES cạnh clock.
 
 module reset_sync #(
     parameter STAGES = 2

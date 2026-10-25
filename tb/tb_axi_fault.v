@@ -1,30 +1,7 @@
 `timescale 1ns/1ps
 `include "soc_pkg.vh"
 
-//======================================================================
 // tb_axi_fault : axi_interconnect error responses, timeout and backpressure (A1/A2)
-//======================================================================
-// DUT: axi_interconnect #(ENABLE_EXT_RAM = 1, EXT_RAM_TIMEOUT = 32) with a
-// behavioural backend on the ext_ram_* (cache_top cpu_*) port whose latency is
-// random per request: 0..20 clk (normal), 25..45 clk (around the timeout) or
-// never (until the TB lets it finish much later). MMIO rdata are constants.
-// Random master traffic (seeded): ext-RAM / MMIO / unmapped / unaligned /
-// partial-WSTRB writes and reads, AW and W presented in random order and
-// delay, random BREADY/RREADY backpressure.
-// Checks:
-//   - AXI: BVALID/RVALID with their payload stay stable until the handshake;
-//     exactly one response per transaction, none without a request;
-//     READY never accepts a second AW/AR before the response.
-//   - Response codes: unmapped -> DECERR (no strobe, no backend request);
-//     unaligned / partial -> SLVERR (no side effect); ext RAM with backend done
-//     in time -> OKAY; backend late -> SLVERR after exactly EXT_RAM_TIMEOUT.
-//   - Scoreboard: an OKAY write is committed by the backend exactly once; a
-//     DECERR / rejected / never-granted write is never committed; an OKAY read
-//     returns the backend memory word; an error read returns 0.
-//   - Backend protocol: request held stable (addr/data) until ready, one ready
-//     per request; a late (orphan) completion never completes a later access.
-//   - Liveness: every transaction responds within TIMEOUT + slack.
-//======================================================================
 
 module tb_axi_fault;
     parameter integer N_TX = 3000;
@@ -72,9 +49,7 @@ module tb_axi_fault;
         end
     endtask
 
-    //------------------------------------------------------------------
     // Behavioural backend: 16 words, random latency, commit at ready
-    //------------------------------------------------------------------
     reg [31:0] mem [0:15];
     integer    lat, busy = 0, wait_n = 0, commits = 0, never = 0;
     reg [31:0] req_addr, req_data; reg req_wr;
@@ -108,9 +83,7 @@ module tb_axi_fault;
         end
     end
 
-    //------------------------------------------------------------------
     // Response stability monitor + strobe counters
-    //------------------------------------------------------------------
     reg        pb = 0, pr = 0; reg [1:0] pbr, prr; reg [31:0] prd;
     integer    strobes = 0;
     always @(posedge clk) if (rst_n) begin
@@ -121,9 +94,7 @@ module tb_axi_fault;
         strobes = strobes + timer_wr_en + interrupt_wr_en + fir_wr_en + timer_rd_en + interrupt_rd_en + fir_rd_en;
     end
 
-    //------------------------------------------------------------------
     // Master
-    //------------------------------------------------------------------
     integer n, kind, d, t0, n_ok = 0, n_slv = 0, n_dec = 0, n_tmo = 0, wseq = 1;
     integer okay_w [0:65535];
     reg [31:0] a, v; reg [1:0] exp_resp; reg wr; integer strobes0, commits0;

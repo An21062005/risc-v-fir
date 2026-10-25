@@ -1,38 +1,6 @@
 `timescale 1ns/1ps
 
-//======================================================================
 // tb_cpu_fir_timer_1000 : Timer IRQ 10 kHz điều phối 1000 mẫu FIR11 HLS, dữ liệu trong RAM ngoài
-//======================================================================
-// Firmware: firmware/fir_timer_1000.c (+ fir_timer_isr.h, startup_irq.S, linker_irq.ld)
-//   build_firmware.py --firmware fir_timer_1000
-// Dữ liệu : data_test/fir_1000/{input,expected,layout}.mem (scripts/gen_fir_1000_data.py).
-// Testbench CHỈ nạp input.mem vào sdram_model trước reset.
-// SoC     : soc_top #(ENABLE_EXT_RAM=1, EXT_RAM_USE_CACHE=USE_CACHE), clock 100 MHz.
-// symbols.mem: fst, __stack_limit, __stack_top, __trap_entry, __trap_mret, __isr_end.
-//
-// Kiểm chứng độc lập (firmware chỉ là nguồn phụ):
-//   Timer   : 1000 tick, tick đầu đúng PERIOD sau cạnh bật, mọi khoảng cách = PERIOD, xung
-//             1 chu kỳ, TICK_COUNT == tick quan sát mỗi chu kỳ, không tick sau khi tắt.
-//   ISR     : mỗi lần vào ISR đọc STATUS 1 lần, ACK 1 lần đúng giá trị đó; ACK chỉ xóa nguồn đang
-//             pending; Timer ISR / FIR ISR == sự kiện pending từng nguồn; mỗi FIR hoàn tất tạo
-//             1 sự kiện FIR IRQ; mret ở __trap_mret, quay về đúng mepc.
-//   Ngữ cảnh: firmware không có vòng kiểm tra thanh ghi -> snapshot TOÀN BỘ x1..x31 khi lệnh đầu
-//             ISR (0x10) tới MEM (lệnh cũ đã ghi xong) và so khi lệnh quay về (mepc) tới MEM.
-//   RAM ngoài: ISR đọc input[i] tuần tự, đúng 1 lần, dữ liệu CPU nhận == input.mem[i] (qua cache
-//             hoặc không); FIR nhận 1000 mẫu đúng thứ tự; ISR ghi output[i] tuần tự đúng 1 lần,
-//             dữ liệu == DATA_OUT; mỗi giao dịch AXI RAM đúng 1 yêu cầu + 1 ready ở cache_top.
-//             Cuối test đọc thẳng sdram_model: input không đổi, output[i] == mô hình Verilog ==
-//             expected.mem (Python), mọi word khác vẫn 0.
-//   FIR     : 10 mẫu flush = 0 trước Timer, không ghi DATA_IN khi BUSY, không OVERRUN,
-//             DATA_OUT == y HLS == mô hình.
-//   Hạn chót: 0 trễ, 0 tick gộp, backlog 1 (đo độc lập, so với fst.*).
-//   Watchdog: tổng MAX_CYCLES, và tiến độ: sau khi bật Timer, mỗi 3 chu kỳ Timer phải có tiến triển
-//             (mẫu được nhận hoặc output được lưu) -> phát hiện deadlock sớm.
-//   Đo: tick -> vào ISR, tick -> FIR nhận mẫu (min/avg/max, jitter), khoảng cách giữa các lần nhận,
-//       FIR latency, tick -> output vào RAM, số IRQ, số giao dịch AXI, tổng chu kỳ.
-//
-// Chạy: python scripts/run_rtl_tests.py --vivado-root <Vivado> --tests tb_cpu_fir_timer_1000_b tb_cpu_fir_timer_1000_c
-//======================================================================
 
 module tb_cpu_fir_timer_1000;
 
@@ -81,9 +49,7 @@ module tb_cpu_fir_timer_1000;
         .clk(clk), .rst_n(rst_n), .cpu_irq(cpu_irq)
     );
 
-    //------------------------------------------------------------
     // Symbols, data
-    //------------------------------------------------------------
     reg [31:0] sym [0:5];
     reg [31:0] S_FST, S_STACK_LIMIT, S_STACK_TOP, S_TRAP, S_MRET, S_ISR_END;
     reg [31:0] layout [0:5];
@@ -105,9 +71,7 @@ module tb_cpu_fir_timer_1000;
         end
     endfunction
 
-    //------------------------------------------------------------
     // Errors
-    //------------------------------------------------------------
     integer errors = 0, checks = 0, msgs = 0, cyc = 0;
 
     task fail;
@@ -173,9 +137,7 @@ module tb_cpu_fir_timer_1000;
         begin in_isr = (pc >= S_TRAP) && (pc < S_ISR_END); end
     endfunction
 
-    //------------------------------------------------------------
     // Independent FIR model (Verilog)
-    //------------------------------------------------------------
     integer    coef [0:TAPS-1];
     integer    hist [0:TAPS-1];
     reg [31:0] coef_rom [0:TAPS-1];
@@ -194,9 +156,7 @@ module tb_cpu_fir_timer_1000;
         end
     endfunction
 
-    //------------------------------------------------------------
     // Context: full register file at ISR entry vs at return
-    //------------------------------------------------------------
     reg [31:0] ctx [1:31];
     reg        ctx_wait = 1'b0, ret_armed = 1'b0;
     reg [31:0] ret_pc, prev_pc_mem = 32'd0;
@@ -215,9 +175,7 @@ module tb_cpu_fir_timer_1000;
         end
     endtask
 
-    //------------------------------------------------------------
     // Monitor state
-    //------------------------------------------------------------
     integer tick_n = 0, en_edge = -1, dis_edge = -1, first_gap = -1, last_tick = -1;
     integer gap_min = 32'h7fffffff, gap_max = 0, gap_bad = 0, tick_after_dis = 0, tick_cnt_err = 0;
     integer tick_t [0:MAX_TICKS-1];
@@ -268,9 +226,7 @@ module tb_cpu_fir_timer_1000;
             cyc = cyc + 1;
             pc_mem = dut.u_cpu.ex_mem_pc_plus_4 - 32'd4;
 
-            //====================================================
             // Timer
-            //====================================================
             if (dut.timer_wr_en && dut.write_addr == A_CTRL) begin
                 if (dut.write_data[0] && !dut.u_timer.ctrl_enable && en_edge < 0) begin
                     en_edge = cyc;
@@ -305,9 +261,7 @@ module tb_cpu_fir_timer_1000;
                 if (tick_cnt_err <= 3) fail("TICK_COUNT != observed ticks", dut.u_timer.tick_count, tick_n);
             end
 
-            //====================================================
             // Interrupt controller
-            //====================================================
             if (en_edge >= 0) begin
                 if (dut.u_int_ctrl.irq_rising[0]) begin
                     if (dut.irq_pending[0] && !(dut.irq_ack && dut.irq_ack_id == 0)) tim_coal = tim_coal + 1;
@@ -328,9 +282,7 @@ module tb_cpu_fir_timer_1000;
                 end
             end
 
-            //====================================================
             // CPU: irq_take / vector / mret / return, context snapshot
-            //====================================================
             if (chk_vec) begin
                 chk_vec = 1'b0;
                 if (dut.u_cpu.pc !== TRAP_VECTOR) fail("PC after irq_take != 0x10", dut.u_cpu.pc, 0);
@@ -390,9 +342,7 @@ module tb_cpu_fir_timer_1000;
                 chk_ret = 1'b1;
             end
 
-            //====================================================
             // Bus requests, classified by the PC of the MEM-stage instruction
-            //====================================================
             if ((dut.bus_rd || dut.bus_wr) && !req_open) begin
                 req_open = 1'b1;
                 req_is_wr = dut.bus_wr;
@@ -523,9 +473,7 @@ module tb_cpu_fir_timer_1000;
                 ram_open = 1'b0;
             end
 
-            //====================================================
             // FIR wrapper / HLS
-            //====================================================
             if (dut.u_fir.wr_data_in && dut.u_fir.busy_q) begin
                 busy_wr = busy_wr + 1;
                 fail("DATA_IN written while FIR BUSY", dut.write_data, accept_n);
@@ -572,9 +520,7 @@ module tb_cpu_fir_timer_1000;
                 dout_rd_n = dout_rd_n + 1;
             end
 
-            //====================================================
             // DMEM, PC, ISA, stack
-            //====================================================
             dw_addr = dut.u_cpu.ex_mem_alu_result;
             if ((dut.u_cpu.dmem_read || dut.u_cpu.dmem_write) && (dw_addr < DMEM_BASE || dw_addr >= DMEM_END)) begin
                 dmem_err = dmem_err + 1;
@@ -634,9 +580,7 @@ module tb_cpu_fir_timer_1000;
         end
     end
 
-    //------------------------------------------------------------
     // Test sequence and final checks
-    //------------------------------------------------------------
     integer i, cnt, lat, lat_min, lat_max, lat_take_min, lat_take_max, ivl_min, ivl_max;
     integer fin_min, fin_max, st_min, st_max;
     reg [63:0] lat_sum, take_sum, st_sum;
@@ -644,7 +588,6 @@ module tb_cpu_fir_timer_1000;
     integer actual_fd;
 
     // Bounded reset scenarios run before the full checked stream. The stimulus never
-    // resets SDRAM contents or changes RTL; startup must clear BSS and flush FIR history.
     wire cache_refilling, cache_invalid;
     integer reset_cases = 0, reset_wait;
     reg reset_target;

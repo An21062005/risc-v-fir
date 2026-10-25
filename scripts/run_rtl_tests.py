@@ -1,17 +1,4 @@
-"""Run the main 1000-sample SoC application and block-level RTL checks with XSim.
-
-  python scripts/run_rtl_tests.py --vivado-root D:/vivado/2026.1/Vivado
-
-By default this builds fir_timer_1000.c and runs tb_cpu_fir_timer_1000_b
-(external RAM, no cache). Use --tests tb_cpu_fir_timer_1000_c for cache,
---fir-matrix for six datasets in B/C, or --tests to select block-level checks.
-The stress/reset/late variants verify the same application.
-
-Generated images, logs, provenance and actual.dat live in outfeed/<test>/.
-Each main application run generates its dataset header and builds matching
-firmware in outfeed/<test>/firmware_build/. A pass requires TEST PASSED and
-no ERROR/FATAL/TEST FAILED. --rtl-root selects alternate RTL for verification.
-"""
+'Run the main 1000-sample SoC application and block-level RTL checks with XSim.'
 
 import argparse
 import hashlib
@@ -72,12 +59,23 @@ def main():
     parser.add_argument("--wave", action="store_true",
                         help="elaborate with -debug typical and log all signals to "
                              "<output>/<test>/<test>.wdb")
+    parser.add_argument("--wave-time", metavar="TIME", default="all",
+                        help="with --wave (implied): simulated time to record, 'all' (default, "
+                             "run to $finish and require TEST PASSED) or e.g. 500us, 2ms, 40000ns "
+                             "(stop there; no pass/fail verdict, ERROR/TEST FAILED still fail)")
     parser.add_argument("--open-wave", metavar="TEST",
                         help="open <output>/TEST/TEST.wdb in the XSim GUI and exit "
                              "(run once with --wave first)")
     parser.add_argument("--fir-matrix", action="store_true", help="all six Timer/FIR datasets in B and C")
     parser.add_argument("--firmware-src", type=Path, help="alternate firmware sources for reproducible mutation tests")
     args = parser.parse_args()
+    wave_limit = None
+    if args.wave_time.strip().lower() != "all":
+        match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*(fs|ps|ns|us|ms|s)\s*", args.wave_time.lower())
+        if not match:
+            parser.error(f"--wave-time: expected 'all' or <number><fs|ps|ns|us|ms|s>, got {args.wave_time!r}")
+        wave_limit = f"{match.group(1)} {match.group(2)}"
+        args.wave = True
     if args.vivado_root is None:
         parser.error("Pass --vivado-root or set XILINX_VIVADO")
     project = Path(__file__).resolve().parent.parent
@@ -88,12 +86,10 @@ def main():
     env = os.environ.copy()
     if os.name == "nt":
         # Match Vivado's loader environment without relying on installation
-        # settings64.bat files that can reference unrelated/missing products.
         binary = vivado / "bin/unwrapped/win64.o"
         paths = [vivado / "lib/win64.o", binary, vivado / "bin"]
         runtimes = list((vivado / "tps/win64").glob("python-*"))
         # Only the newest bundled JRE (Vivado's default, see bin/rdiArgs.bat):
-        # an older JRE earlier on PATH makes the XSim GUI fail to create its JVM.
         jres = sorted((vivado / "tps/win64").glob("jre*"),
                       key=lambda p: [int(v) for v in re.findall(r"\d+", p.name)])
         if jres:
@@ -121,8 +117,6 @@ def main():
         if not wdb.is_file():
             parser.error(f"{wdb} not found; run with --tests {args.open_wave} --wave first")
         # The GUI needs Vivado's full Tcl/Java setup, so go through the official
-        # launcher (bin/xsim[.bat]) with the caller's environment, not the batch
-        # environment above. It keeps running after this script exits.
         if os.name == "nt":
             command = ["cmd", "/c", str(vivado / "bin" / "xsim.bat"), "-gui", wdb.name]
         else:
@@ -159,7 +153,6 @@ def main():
                 sources.append(rtl / Path(line).relative_to("rtl"))
     vector_dir = (args.vector_dir or project / "data_test/fir_test/output").resolve()
     # RTL results of the official vectors: <output>/<test>/actual.dat (outfeed/);
-    # runs on other vector sets stay in the testbench directory so they never mix.
     if args.outfeed_dir:
         outfeed_dir = args.outfeed_dir.resolve()
     elif args.vector_dir:
@@ -252,7 +245,6 @@ def main():
             shutil.copy2(data, directory / data.name)
         if top in ("tb_cpu_bus", "tb_cpu_fault", "tb_cpu_flush_hold"):
             # Empty memory fixtures for the CPU's readmemh; the testbench
-            # installs directed instructions after time-zero initialization.
             (directory / "program.mem").write_text("00000013\n" * 256, encoding="ascii")
             (directory / "data.mem").write_text("00000000\n" * 256, encoding="ascii")
         if top == "tb_cpu_irq_c4":
@@ -263,14 +255,12 @@ def main():
         sim_timeout = 180
         if name in firmware_tests:
             # GCC image, never the NOP fixtures above. Build first so the image
-            # always matches firmware/ sources (toolchain next to Vivado).
             cfg = firmware_tests[name]
             firmware, firmware_build, firmware_files = cfg["fw"], cfg["build"], cfg["files"]
             sim_timeout = cfg["timeout"]
             source_dir = args.firmware_src
             if top == "tb_cpu_fir_timer_1000":
                 # Generate all fixtures AND the firmware header together in this run directory.
-                # Never reuse a tracked noise checksum with a different input or expected file.
                 from gen_fir_1000_data import build as build_vectors
                 files, _, _ = build_vectors(cfg.get("dataset", "test_04_noise"))
                 source_dir = directory / "firmware_src"
@@ -325,18 +315,26 @@ def main():
             options.extend(["-generic_top", generic])
         run("xelab", options, directory, "elaborate.log")
         if args.wave:
-            (directory / "wave.tcl").write_text("log_wave -r /\nrun -all\nquit\n", encoding="ascii")
+            run_cmd = f"run {wave_limit}" if wave_limit else "run -all"
+            (directory / "wave.tcl").write_text(f"log_wave -r /\n{run_cmd}\nquit\n", encoding="ascii")
             sim_args = [name, "-tclbatch", "wave.tcl", "-wdb", f"{name}.wdb"]
         else:
             sim_args = [name, "-runall"]
         for plusarg in plusargs:
             sim_args += ["-testplusarg", plusarg]
-        run("xsim", sim_args, directory, "simulate.log", require_pass=True, timeout=sim_timeout)
+        # A time-limited wave run stops before the testbench verdict: only ERROR/TEST FAILED fail it.
+        run("xsim", sim_args, directory, "simulate.log", require_pass=wave_limit is None,
+            timeout=sim_timeout)
+        if wave_limit:
+            print(f"WAVE {name}: recorded {wave_limit} -> {directory / (name + '.wdb')}")
         # xsim keeps a backup of the previous xsim.jou/log on every rerun;
-        # simulate.log already holds the full output.
         for backup in directory.glob("xsim_*.backup.*"):
             backup.unlink()
-    print(f"PASS: {len(selected)} test configuration(s)")
+    if wave_limit:
+        print(f"WAVE-ONLY: {len(selected)} test configuration(s) stopped at {wave_limit}; "
+              "no pass/fail verdict (rerun without --wave-time for one)")
+    else:
+        print(f"PASS: {len(selected)} test configuration(s)")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,7 @@
 # riscv-soc-fir-hls
 
+Vivado Block Design: xem [hướng dẫn tạo project, sơ đồ gom bus và kiểm chứng](docs/BLOCK_DESIGN.md).
+
 Mới đọc thiết kế: xem [lộ trình từ luồng chính đến từng test/khối RTL](docs/FIR_READING_GUIDE.md)
 và [hướng dẫn firmware, build và ảnh `.mem`](firmware/README.md).
 
@@ -9,11 +11,11 @@ bus AXI4-Lite cùng Timer, bộ điều khiển ngắt và RAM dữ liệu ngoà
 
 | Hạng mục | Trạng thái hiện tại |
 |---|---|
-| Mô phỏng XSim | Luồng chính 1000 mẫu mặc định; báo cáo 56 cấu hình trước khi tinh gọn được lưu ở mục 11 |
+| Mô phỏng XSim | Luồng chính 1000 mẫu; 7 bài kiểm tra tích hợp Block Design A/B/C PASS (mục 11) |
 | FIR HLS so với mô hình Python | bit-exact 6/6 bộ vector (6 000 mẫu), 1 000 mẫu × 6 dataset × 2 cấu hình RAM |
-| Vivado synthesis (cấu hình A) | **PASS**: 0 latch, 0 critical warning, nạp đủ 4 file khởi tạo bộ nhớ |
-| Timing 100 MHz (sau place & route) | **FAIL**: WNS −3,247 ns, Fmax ≈ 75 MHz (75 MHz và 50 MHz đạt) |
-| Chạy trên FPGA | **Chưa**: chưa gán chân board, chưa tạo bitstream, chưa chạy phần cứng |
+| Vivado synthesis (Block Design C) | **PASS**: 0 latch, 0 critical warning, nạp đủ 4 file khởi tạo bộ nhớ |
+| Timing 100 MHz (sau synthesis) | Chưa đạt: WNS −4,945 ns; không yêu cầu đóng timing trong phạm vi project |
+| Phạm vi | Mô phỏng và synthesis; không yêu cầu chạy board hoặc tạo bitstream |
 
 ## Mục lục
 
@@ -30,7 +32,7 @@ bus AXI4-Lite cùng Timer, bộ điều khiển ngắt và RAM dữ liệu ngoà
 11. [Kết quả kiểm chứng](#11-kết-quả-kiểm-chứng)
 12. [Synthesis và timing](#12-synthesis-và-timing)
 13. [Giới hạn và việc cần làm trước khi chạy FPGA](#13-giới-hạn-và-việc-cần-làm-trước-khi-chạy-fpga)
-14. [Tài liệu kiểm chứng chi tiết](#14-tài-liệu-kiểm-chứng-chi-tiết)
+14. [Tài liệu hướng dẫn](#14-tài-liệu-hướng-dẫn)
 15. [Lưu ý khi sử dụng](#15-lưu-ý-khi-sử-dụng)
 
 ## 1. Tổng quan
@@ -122,7 +124,7 @@ riscv-soc-fir-hls/
 │   │                           rtl_plots/ (đồ thị RTL vs Python)
 │   └── fir_1000/               input/expected/layout.mem 1 000 mẫu + manifest.txt
 ├── outfeed/<test>/actual.dat   kết quả FIR RTL của tb_fir11_vectors (được git theo dõi)
-└── docs/                       3 báo cáo kiểm chứng (mục 14)
+└── docs/                       hướng dẫn đọc thiết kế, Block Design và ảnh sơ đồ (mục 14)
 ```
 
 `outfeed/tb_*/`, `outfeed/synth_*/`, `firmware/build/` là thư mục sinh ra, đã gitignore.
@@ -287,6 +289,7 @@ song song các nhóm này và tự kiểm lý do "đỏ" của negative test.
 | `--seed N` | seed cho test random (mặc định 1) |
 | `--output DIR` | thư mục kết quả (mặc định `outfeed/`) |
 | `--wave` / `--open-wave TB` | ghi waveform `outfeed/<tb>/<tb>.wdb` / mở trong XSim GUI |
+| `--wave-time all\|<t>` | thời gian ghi sóng (tự bật `--wave`): `all` (mặc định) chạy hết và yêu cầu `TEST PASSED`; `500us`, `2ms`, `40000ns`... dừng tại mốc đó, không kết luận PASS (vẫn báo lỗi nếu có `ERROR`/`TEST FAILED`) |
 | `--rtl-root DIR` | chạy trên một bản RTL khác (ví dụ mutant) |
 | `--firmware-src DIR` | nguồn firmware khác (thử nghiệm đột biến) |
 | `--vector-dir DIR`, `--outfeed-dir DIR` | bộ vector khác / nơi ghi `actual.dat` cho `tb_fir11_vectors` |
@@ -434,56 +437,51 @@ bootloader/UART/DMA để nạp dữ liệu, SoC chưa có.
 
 ## 11. Kết quả kiểm chứng
 
-Kết quả lịch sử trước khi bỏ firmware phụ; bảng này không phải danh sách test hiện hành (chi tiết: [docs/PHASE5_VERIFICATION.md](docs/PHASE5_VERIFICATION.md)):
+Kiểm tra trên HDL Block Design do Vivado sinh ra, dùng các scoreboard hiện có:
 
 | Nhóm | Cấu hình | Kết quả |
 |---|---|---|
-| Regression mặc định | 20 | 20 PASS |
-| Firmware smoke, fir_smoke, fir_stream, ext_ram B/C, fir_1000 B/C | 7 | 7 PASS |
-| Timer IRQ A/B/C, fir_timer, fir_timer_stress | 5 | 5 PASS |
-| fir_timer_1000 B/C, stress, reset, late (B/C) | 8 | 8 PASS |
-| Ma trận 6 dataset × B/C (1 000 mẫu, bit-exact) | 12 | 12 PASS |
-| Negative test timing_fault / jitter_fault (B/C) | 4 | 4 bị từ chối đúng dự kiến |
-| **Tổng** | **56** | **52 PASS + 4 negative đúng dự kiến, 0 FAIL ngoài dự kiến** |
+| Elaboration và reset | A | PASS |
+| 1000 mẫu noise, đối chiếu từng chu kỳ với RTL gốc | B/C | 2 PASS, mỗi bài 83 checks, 0 lỗi |
+| Lỗi bus, BUSERR, timeout và orphan | B/C | 2 PASS, mỗi bài 32 checks, 0 lỗi |
+| Reset giữa giao dịch rồi chạy lại đủ 1000 mẫu | B/C | 2 PASS, B: 134 checks; C: 151 checks; 0 lỗi |
+| **Tổng** | **7 bài mô phỏng** | **7 PASS** |
 
-Các lỗi đã sửa và kiểm chứng ở giai đoạn gần nhất:
-
-| ID | Lỗi | Kiểm chứng |
-|---|---|---|
-| I1 | ACK trễ của sự kiện FIR cũ xóa mất ngắt của lần hoàn tất mới → kẹt luồng | quét độ trễ ACK 0–40 chu kỳ: 41/41 giữ ngắt (RTL cũ mất 24) |
-| C4 | `sw ACK; mret` sát nhau chỉ có biên 0 chu kỳ | biên ≥ 1 chu kỳ ở A/B/C, không ngắt lặp |
-| A1 | master bỏ qua BRESP/RRESP, địa chỉ không map trả OKAY | DECERR/SLVERR, thanh ghi BUSERR, đọc lỗi trả 0 |
-| A2 | RAM ngoài không trả lời làm CPU treo | timeout 1 024 chu kỳ → SLVERR; 49 052 kiểm tra AXI, 4/4 mutant RTL bị bắt |
-| S1 | reset không đồng bộ khi nhả | `reset_sync` 2 FF |
+Xem [hướng dẫn chạy kiểm tra Block Design](docs/BLOCK_DESIGN.md#kiểm-tra-trên-thiết-kế-mới).
+Log, testbench sinh ra và hash source/ảnh bộ nhớ nằm trong
+`outfeed/block_design/<cfg>/checks/<test>/`. Các bài đối chiếu theo chu kỳ
+dùng dataset noise; đây là kiểm chứng bằng mô phỏng, không phải chứng minh formal mọi input.
 
 ## 12. Synthesis và timing
 
 ```bash
 # Kiểm synthesis cấu hình C với firmware chính; không tạo bitstream, không nạp input RAM
 python scripts/run_vivado_synth.py --vivado-root D:/vivado/2026.1/Vivado --cfg C
+
+# Tạo Block Design, synthesis toàn top và xuất sơ đồ
+python scripts/run_block_design.py --vivado-root D:/vivado/2026.1/Vivado --cfg C --synth --diagram
 ```
 
-Script mặc định dùng cấu hình C và `fir_timer_1000`. Các số liệu A/C dưới đây
-là kết quả lịch sử trước khi tinh gọn firmware; không phải đo lại của lần thay đổi này.
+Hai luồng dùng cấu hình C và firmware `fir_timer_1000`.
 
 Part `xc7z020clg484-1` (cùng part với báo cáo HLS; dùng để ước lượng tài nguyên/timing, board chưa
 xác định). Ràng buộc: [fpga/soc_top.xdc](fpga/soc_top.xdc) chỉ có clock 100 MHz, chưa gán chân.
 
-| | Cấu hình A sau place & route | Cấu hình C sau synth |
-|---|---|---|
-| LUT | 2 533 (4,8 %) | 3 437 (6,5 %) |
-| Flip-flop | 2 460 (2,3 %) | 3 174 |
-| Latch | 0 | 0 |
-| BRAM36 | 1 (FIR) | 17 (sdram_model + FIR) |
-| DSP48 | 2 (nhân FIR) | 2 |
-| Khởi tạo bộ nhớ | `program.mem`, `data.mem`, 2 file `.dat` nạp thành công | như A |
-| Critical warning / error | 0 / 0 | 0 / 0 |
-| **Timing 100 MHz** | **FAIL**: WNS −3,247 ns, TNS −940 ns; hold đạt (WHS +0,056 ns) | ước lượng WNS −4,945 ns |
+Kết quả Block Design C, top `soc_system_wrapper`, Vivado 2026.1:
 
-- **Synthesis PASS, timing 100 MHz FAIL.** Cùng netlist đã route: 75 MHz đạt WNS +0,086 ns (sát),
-  50 MHz đạt WNS +6,753 ns. Fmax ≈ 75 MHz.
-- Đường găng (13 tầng logic) nằm trong CPU: forwarding từ WB → ALU/so sánh nhánh ở EX → flush →
-  clock enable của IF/ID. Muốn đạt 100 MHz phải sửa pipeline CPU.
+| Hạng mục | Sau synthesis |
+|---|---|
+| LUT / Flip-flop | 3 433 / 3 174 |
+| Latch | 0 |
+| BRAM36 / DSP | 17 / 2 |
+| Khởi tạo bộ nhớ | `program.mem`, `data.mem`, 2 file FIR `.dat` nạp thành công |
+| Critical warning / error | 0 / 0 |
+| Timing 100 MHz | Chưa đạt: WNS −4,945 ns, TNS −1526,985 ns |
+
+**Synthesis PASS; timing closure không thuộc yêu cầu project.** Giữ clock
+constraint 100 MHz; không chạy place/route cho phần Block Design này.
+Log và báo cáo nằm trong `outfeed/block_design/C/`; lần tái tạo từ thư mục
+mới với cùng kết quả nằm trong `outfeed/block_design/clean_C/`.
 
 ## 13. Giới hạn và việc cần làm trước khi chạy FPGA
 
@@ -503,15 +501,13 @@ Giới hạn khác của thiết kế: CPU là tập con RV32I (không có byte/
 `sltu`, M extension), không có CSR/trap ngoại lệ, một mức ngắt không lồng; IMEM/DMEM chỉ 1 KB;
 lỗi bus không gây trap (phần mềm đọc BUSERR); chưa kiểm chứng ISA đầy đủ.
 
-## 14. Tài liệu kiểm chứng chi tiết
+## 14. Tài liệu hướng dẫn
 
-| Tài liệu | Nội dung | Trạng thái |
-|---|---|---|
-| [docs/PHASE5_VERIFICATION.md](docs/PHASE5_VERIFICATION.md) | I1/C4, AXI lỗi/timeout, reset sync, regression 56/56, synthesis/timing | báo cáo lịch sử trước khi tinh gọn |
-| [docs/PHASE41_VERIFICATION.md](docs/PHASE41_VERIFICATION.md) | Giai đoạn 4.1: deadline checker, ma trận dataset, negative test | lịch sử (trước Phase 5) |
-| [docs/RTL_FIX_VERIFICATION.md](docs/RTL_FIX_VERIFICATION.md) | sửa lỗi AXI/FIR ban đầu, firmware Bước 1–4, Timer/FIR IRQ Giai đoạn 1–4 | lịch sử (trước Phase 5) |
-
-Các báo cáo kiểm chứng ghi đúng trạng thái tại thời điểm đó; các điểm đã thay đổi được đánh dấu ở đầu mỗi file.
+| Tài liệu | Nội dung |
+|---|---|
+| [docs/FIR_READING_GUIDE.md](docs/FIR_READING_GUIDE.md) | Thứ tự đọc code, luồng Timer/FIR IRQ, test và waveform |
+| [docs/BLOCK_DESIGN.md](docs/BLOCK_DESIGN.md) | Tạo/mở project Vivado, gom bus, chạy mô phỏng và synthesis |
+| [firmware/README.md](firmware/README.md) | Firmware chính, build và nạp ảnh bộ nhớ trong mô phỏng |
 
 ## 15. Lưu ý khi sử dụng
 
@@ -520,5 +516,6 @@ Các báo cáo kiểm chứng ghi đúng trạng thái tại thời điểm đó
 - **`actual.dat` dùng xuống dòng CRLF** (XSim trên Windows); bỏ `\r` trước khi so bằng `cmp`.
 - **Reset**: chân `rst_n` đi qua `reset_sync`, DUT ra khỏi reset sau 2 cạnh clock kể từ khi nhả chân.
 - Waveform: `--wave` ghi toàn bộ tín hiệu (ví dụ `tb_fir11_vectors.wdb` khoảng 24 MB);
-  `--open-wave <tb>` mở bằng `bin/xsim.bat -gui`.
+  `--open-wave <tb>` mở bằng `bin/xsim.bat -gui`. Với `tb_cpu_fir_timer_1000_*` (≈ 10 triệu chu kỳ)
+  nên giới hạn bằng `--wave-time 500us` (đủ 4 mẫu đầu, tick đầu ở chu kỳ 10 553).
 - `outfeed/tb_*/` và `outfeed/synth_*/` xóa được bất cứ lúc nào; chạy lại test/synthesis sẽ tạo lại.

@@ -1,10 +1,4 @@
-/* tb/asm/irq_dir.S - directed ISR variants for tb_cpu_irq_c4 (I1/C4); built by
- * scripts/run_rtl_tests.py per variant with -DMODE -DNOPS -DENABLE [-DLOOPPAD]
- * MODE 0 (C4-A): sw ACK(FIR const) ; NOPS x nop ; mret
- * MODE 1 (C4-B): lw STATUS ; sw ACK(STATUS) ; NOPS x nop ; mret
- * MODE 2 (I1)  : sw DATA_IN (next sample) ; NOPS x nop ; sw ACK(FIR) ; mret
- * x14 = MMIO base, x6 = ACK code FIR (3), x20 = ISR count, x21 = main loop count
- */
+/* tb/asm/irq_dir.S - directed ISR variants for tb_cpu_irq_c4 (I1/C4); built by */
     .option norelax
     .text
     .globl _start

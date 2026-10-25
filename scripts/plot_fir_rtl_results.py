@@ -1,33 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-plot_fir_rtl_results.py
-=======================
-Phân tích và trực quan hóa kết quả mô phỏng FIR11 RTL (tb_fir11_vectors.v).
-
-Nguồn dữ liệu (đường dẫn tính từ project root, không phụ thuộc thư mục chạy):
-    data_test/fir_test/output/<test>/input.dat     x[n]      (Python generator)
-    data_test/fir_test/output/<test>/expected.dat  y_ref[n]  (Python, hệ số fir.cpp)
-    outfeed/<test>/actual.dat                      y_rtl[n]  (RTL; scripts/run_rtl_tests.py
-                                                    truyền +OUT_DIR=<project>/outfeed)
-    hls/FIR11/FIR11/fir.cpp                        hệ số c[] cho đáp ứng lý thuyết
-
-Đầu ra (chỉ ghi vào data_test/fir_test/rtl_plots/):
-    <test>/time_domain.png, <test>/frequency_domain.png, <test>/error.png
-    fir_rtl_comparison.png (mixed + noise), summary.txt
-    Mỗi hình có bản .png (200 dpi) và .svg (vector) cùng tên.
-    Xem trong cửa sổ tương tác (zoom/pan): python scripts/view_fir_plots.py <1-6> --window
-
-Quy ước:
-    - So sánh bit-exact: số nguyên Python, error[n] = actual[n] - expected[n], không
-      tolerance, không dịch/căn chỉnh chuỗi, không làm tròn.
-    - Output chia SCALE = 1000 CHỈ để hiển thị / đo biên độ; dữ liệu gốc giữ nguyên.
-    - Độ lợi đo bằng fit bình phương tối thiểu đồng thời (DC + các tần số có trong
-      input) trên đoạn ổn định n >= 10 (bỏ quá độ FIR 10 mẫu), không đọc bin FFT
-      nên không bị rò rỉ phổ. Chỉ đo tại tần số mà input thực sự chứa.
-
-Chạy:  python scripts/plot_fir_rtl_results.py      (exit 0 = mọi test bit-exact)
-"""
+'plot_fir_rtl_results.py'
 
 import re
 import sys
@@ -37,9 +10,7 @@ import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt     # backend: Agg khi lưu file (main), TkAgg khi xem cửa sổ
 
-# =============================================================================
 # Cấu hình
-# =============================================================================
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FIR_TEST_DIR = PROJECT_ROOT / "data_test" / "fir_test"
 REF_DIR = FIR_TEST_DIR / "output"
@@ -69,7 +40,6 @@ TESTS = {
 }
 
 # Bảng màu: 3 slot categorical đầu của palette tham chiếu (đã validate all-pairs),
-# status palette cho PASS/FAIL (luôn kèm ký hiệu + chữ), mực/khung trung tính.
 C_IN, C_EXP, C_ACT = "#2a78d6", "#eb6834", "#1baf7a"
 C_GOOD, C_CRIT = "#0ca30c", "#d03b3b"
 INK, INK2, MUTED = "#0b0b0b", "#52514e", "#898781"
@@ -93,9 +63,7 @@ class DataError(Exception):
     """Dữ liệu thiếu hoặc không hợp lệ."""
 
 
-# =============================================================================
 # Đọc và kiểm tra dữ liệu
-# =============================================================================
 INT_RE = re.compile(r"^[+-]?\d+$")
 
 
@@ -142,9 +110,7 @@ def rel(p):
         return str(p)
 
 
-# =============================================================================
 # Phân tích
-# =============================================================================
 def h_theory(coeff, freqs):
     """|H(f)| lý thuyết của hệ số HLS, chuẩn hóa /SCALE."""
     f = np.atleast_1d(np.asarray(freqs, dtype=float))
@@ -154,10 +120,7 @@ def h_theory(coeff, freqs):
 
 
 def tone_fit(x, freqs):
-    """
-    Fit đồng thời x ~ DC + sum_f (a_f cos + b_f sin) trên đoạn ổn định n >= TRANSIENT.
-    Trả về {f: (biên độ, sai số chuẩn của biên độ)}.
-    """
+    'Fit đồng thời x ~ DC + sum_f (a_f cos + b_f sin) trên đoạn ổn định n >= TRANSIENT.'
     seg = np.asarray(x[TRANSIENT:], dtype=float)
     n = np.arange(TRANSIENT, TRANSIENT + len(seg))
     cols = [np.ones(len(seg))]
@@ -228,9 +191,7 @@ def analyze(name, x, y_exp, y_act, coeff):
     return r
 
 
-# =============================================================================
 # Vẽ  (fig_* trả về Figure: dùng chung cho lưu file và cửa sổ tương tác)
-# =============================================================================
 ANNOT = 10.5        # cỡ chữ chú thích trên hình
 LW_IN, LW_EXP, LW_ACT, LW_REF = 1.5, 2.6, 2.0, 1.6
 DASH_ACT = (0, (5, 3))
@@ -455,9 +416,7 @@ def load_test(name, coeff):
     return analyze(name, x, ye, ya, coeff)
 
 
-# =============================================================================
 # Main
-# =============================================================================
 def main():
     try:
         sys.stdout.reconfigure(encoding="utf-8")

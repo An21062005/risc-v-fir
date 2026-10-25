@@ -1,43 +1,30 @@
 `ifndef SDRAM_PKG_VH
 `define SDRAM_PKG_VH
 
-// Bản sao từ tiny-riscv-soc/rtl/packages/sdram_pkg.vh (MIT, xem
-// tiny-riscv-soc/LICENCE). Nội dung không đổi. Hình học (4 bank x 8192 row x
-// 512 column x 16 bit = 32 MB) dùng để suy ra ánh xạ địa chỉ trong
-// rtl/Memory/sdram.v; mô hình mô phỏng chỉ cấp phát cửa sổ 64 KB đầu.
+// Tham số SDRAM; nguồn tiny-riscv-soc (MIT, (c) 2026 Leela Shanmukh Yagneek Patnala).
 
-//------------------------------------------------------------
-// SDRAM Configuration
-//------------------------------------------------------------
+// Tham số SDRAM; nguồn tiny-riscv-soc (MIT, (c) 2026 Leela Shanmukh Yagneek Patnala).
 
 `define SDRAM_ADDR_WIDTH      13
 `define SDRAM_BANK_WIDTH      2
 `define SDRAM_DATA_WIDTH      16
 `define SDRAM_DQM_WIDTH       2
 
-//------------------------------------------------------------
 // Memory Geometry
-//------------------------------------------------------------
 
 `define SDRAM_BANKS           4
 `define SDRAM_ROWS            8192
 `define SDRAM_COLUMNS         512
 
-//------------------------------------------------------------
 // CAS Latency
-//------------------------------------------------------------
 
 `define CAS_LATENCY           3
 
-//------------------------------------------------------------
 // Burst Length
-//------------------------------------------------------------
 
 `define BURST_LENGTH          4
 
-//------------------------------------------------------------
 // SDRAM Commands
-//------------------------------------------------------------
 
 `define CMD_LOAD_MODE         4'b0000
 `define CMD_AUTO_REFRESH      4'b0001
@@ -48,9 +35,7 @@
 `define CMD_BURST_STOP        4'b0110
 `define CMD_NOP               4'b0111
 
-//------------------------------------------------------------
 // Timing Parameters
-//------------------------------------------------------------
 
 `define tRP                  3
 `define tRCD                 3
@@ -60,15 +45,11 @@
 `define tRAS                 6
 `define tRC                  9
 
-//------------------------------------------------------------
 // Refresh
-//------------------------------------------------------------
 
 `define REFRESH_PERIOD        780
 
-//------------------------------------------------------------
 // FSM States
-//------------------------------------------------------------
 
 `define SDRAM_RESET           4'd0
 `define SDRAM_INIT            4'd1

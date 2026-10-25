@@ -1,29 +1,4 @@
-/*
- * fir_timer_isr.h - ISR của fir_timer_1000.c: Timer IRQ + FIR IRQ, RAM ngoài.
- * Live deadline clock through the final output store.
- *
- * Trước khi #include, file nguồn phải định nghĩa:
- *   FT_N        số mẫu (mask Timer IRQ at FT_N; clock stops after final output)
- *   FT_IN(i)    biểu thức đọc mẫu vào thứ i      (RAM ngoài)
- *   FT_OUT(i)   lvalue lưu kết quả thứ i          (RAM ngoài)
- * Header dùng bản đồ thanh ghi soc_mmio.h, định nghĩa fir_state_t fst, try_send() và irq_handler() (gọi từ
- * __trap_entry của startup_irq.S với -DIRQ_C_HANDLER=irq_handler). Hai hàm nằm trong .text.isr
- * (linker_irq.ld đặt ngay sau trap entry -> [__trap_entry, __isr_end) = mã ngữ cảnh ngắt).
- *
- * irq_handler: đọc STATUS, ghi lại đúng giá trị đó vào ACK ngay đầu ISR (xóa đúng nguồn đang
- * phục vụ, trước mọi đọc DATA_OUT / ghi DATA_IN), rồi
- *   Timer: read live ticks, mask Timer IRQ at FT_N, update backlog, try_send()
- *   FIR: store output, read still-running TICK_COUNT, then stop Timer after final output.
- *   A result is conservatively late if the deadline observation (after the completed store)
- *   reaches the next tick. No cycle CSR exists on this CPU. Keeping the existing periodic
- *   clock alive avoids a stopped-clock false negative, including during backlog drain.
- *   Timer IRQ is masked at FT_N to avoid priority starvation under overload; a masked
- *   Timer pending bit may remain at HALT. FIR IRQ remains enabled. No new timer register.
- *   Counter wrap is outside this bounded 1000-sample run (2^32 ticks).
- *   khác : spurious++
- * try_send: gửi FT_IN(sent) chỉ khi sent < min(ticks, FT_N) (đến hạn) và sent == done (FIR rảnh,
- * output trước đã thu) -> không BUSY/OVERRUN, đúng thứ tự, không bỏ/không lặp mẫu.
- */
+/* ISR Timer/FIR: ACK nguồn ngắt, gửi mẫu đến hạn khi FIR rảnh và thu kết quả. */
 #ifndef FIR_TIMER_ISR_H
 #define FIR_TIMER_ISR_H
 

@@ -1,35 +1,6 @@
 `timescale 1ns/1ps
 
-//======================================================================
 // tb_fir11_wrapper : testbench tự kiểm cho fir11_wrapper + FIR11 HLS thật
-//======================================================================
-// Kết quả chạy: docs/RTL_FIX_VERIFICATION.md. Chỉ kiểm khối bọc + IP, không có CPU,
-// không dùng program.mem. Kiểm chương trình CPU là việc riêng (cần sw/).
-//
-// Mô hình bus giống axi_interconnect:
-//   ghi : wr_en 1 chu kỳ (bus_write)
-//   đọc : rd_en 1 chu kỳ, lấy rdata ở chu kỳ sau (bus_read)
-// Mô hình tham chiếu: phép tính RTL modulo 2^32,
-//   c = {54,0,-92,0,313,500,313,0,-92,0,54}, hist[0] = mẫu mới nhất.
-//
-// Nhóm kiểm tra:
-//   T1  giá trị sau reset, offset không map
-//   T2  chuỗi mẫu liên tiếp (xung đơn vị, số âm, số lớn gây tràn)
-//   T3  một DATA_IN -> đúng một lần IP chạy, một ap_done, không chạy lặp
-//   T4  ghi DATA_IN khi bận: bỏ qua, overrun, x không đổi
-//   T5  xóa done bằng CTRL bit0; DATA_OUT vẫn giữ kết quả
-//   T6  đọc DATA_OUT lặp lại: không tạo cạnh IRQ mới
-//   T7  hoàn tất trùng chu kỳ với xóa (CTRL bit0 / đọc DATA_OUT): done thắng
-//   T8  reset mềm khi rảnh: lịch sử FIR giữ nguyên (hành vi đọc từ RTL HLS)
-//   T9  reset mềm khi đang chạy / đúng chu kỳ ap_done: không IRQ còn sót
-//   T10 sau reset mềm giữa chừng: nạp 11 mẫu mới rồi đối chiếu lại
-//
-// Chạy (từ thư mục dự án, xem rtl/Peripherals/FIR11/README.md):
-//   bash scripts/prep_fir11_dat.sh sim_fir11 && cd sim_fir11
-//   bash ~/.claude/skills/soc-design/scripts/qsim.sh all --top tb_fir11_wrapper \
-//        ../rtl/Peripherals/fir11_wrapper.v ../rtl/Peripherals/FIR11/*.v ../tb/tb_fir11_wrapper.v
-//   (vsim đọc .dat theo thư mục làm việc hiện tại, nên phải cd vào sim_fir11)
-//======================================================================
 
 module tb_fir11_wrapper;
 
@@ -49,9 +20,7 @@ module tb_fir11_wrapper;
     localparam TAPS       = 11;
     localparam CLK_PERIOD = 10;
 
-    //------------------------------------------------------------
     // DUT
-    //------------------------------------------------------------
 
     reg         clk;
     reg         rst_n;
@@ -78,9 +47,7 @@ module tb_fir11_wrapper;
     initial clk = 1'b0;
     always #(CLK_PERIOD/2) clk = ~clk;
 
-    //------------------------------------------------------------
     // Scoreboard helpers
-    //------------------------------------------------------------
 
     integer errors;
     integer checks;
@@ -98,9 +65,7 @@ module tb_fir11_wrapper;
         end
     endtask
 
-    //------------------------------------------------------------
     // Monitors (hierarchical refs into the real HLS IP)
-    //------------------------------------------------------------
 
     integer n_accept;      // DATA_IN accepted by the wrapper
     integer n_ip_start;    // IP leaves state1 with ap_start=1
@@ -130,9 +95,7 @@ module tb_fir11_wrapper;
         end
     end
 
-    //------------------------------------------------------------
     // Bus model (same timing as axi_interconnect)
-    //------------------------------------------------------------
 
     task bus_write;
         input [31:0] addr;
@@ -171,8 +134,6 @@ module tb_fir11_wrapper;
                 k = k + 1;
             end
             // IRQ is assigned by NBA at completion. The edge monitor sees
-            // that new level on the following posedge; settle it before callers
-            // take n_irq_rise as the baseline for checking later read effects.
             @(negedge clk);
             checks = checks + 1;
             if (!irq) begin
@@ -191,9 +152,7 @@ module tb_fir11_wrapper;
         end
     endtask
 
-    //------------------------------------------------------------
     // Reference model (fir.cpp)
-    //------------------------------------------------------------
 
     integer hist [0:TAPS-1];
     integer coef [0:TAPS-1];
@@ -249,9 +208,7 @@ module tb_fir11_wrapper;
         end
     endtask
 
-    //------------------------------------------------------------
     // Test sequence
-    //------------------------------------------------------------
 
     reg [31:0] r;
     reg [31:0] cyc_first;
@@ -382,7 +339,6 @@ module tb_fir11_wrapper;
         check_eq(irq, 1'b0, "irq cleared after T7a read");
 
         // T7b: read snapshots old y while completion latches new y.
-        // Completion wins the clear: DONE must survive for the new result.
         bus_read(A_DATA_OUT, y_before);
         bus_write(A_DATA_IN, 32'd12);
         wait_ap_done_negedge;
@@ -436,9 +392,7 @@ module tb_fir11_wrapper;
         bus_read(A_STATUS, r);
         check_eq(r, ST_IDLE, "STATUS after soft reset at ap_done");
 
-        //---------------- T10 re-sync after abort ----------------
-        // shift_reg may be partially shifted by the abort: push 11 fresh
-        // samples (unchecked), then the window is fully known again.
+        // ---------------- T10 re-sync after abort ----------------
         $display("[%0t] T10 resync after abort", $time);
         for (i = 0; i < TAPS; i = i + 1)
             run_sample(i * 11 + 1, 1'b0);
@@ -458,9 +412,7 @@ module tb_fir11_wrapper;
         $finish;
     end
 
-    //------------------------------------------------------------
     // Helpers for cycle-aligned races (T7, T9b)
-    //------------------------------------------------------------
 
     task wait_ap_done_negedge;
         integer k;
@@ -479,7 +431,6 @@ module tb_fir11_wrapper;
     endtask
 
     // Start a run with x, then drive the write held in wr_addr/wdata
-    // (set by the caller before the call) in the ap_done cycle.
     task bus_write_at_done_start;
         input [31:0] x;
         reg   [31:0] a, d;

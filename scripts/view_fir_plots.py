@@ -1,27 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-view_fir_plots.py - xem nhanh đồ thị FIR RTL vs Python trong trình duyệt.
-
-Đọc data_test/fir_test/rtl_plots/ (do plot_fir_rtl_results.py tạo), sinh:
-    rtl_plots/index.html          tổng quan 6 test + hình tổng hợp mixed/noise
-    rtl_plots/<test>/index.html   time / frequency / error + số liệu của test đó
-rồi mở trang tương ứng. Không sửa dữ liệu hay đồ thị.
-
-Ví dụ:
-    python scripts/view_fir_plots.py       # trang tổng quan
-    python scripts/view_fir_plots.py 1     # test_01_low     - sin 500 Hz
-    python scripts/view_fir_plots.py 2     # test_02_high    - sin 4000 Hz
-    python scripts/view_fir_plots.py 3     # test_03_mixed   - 500 Hz + 4000 Hz
-    python scripts/view_fir_plots.py 4     # test_04_noise   - 500 Hz + 4000 Hz + nhiễu
-    python scripts/view_fir_plots.py 5     # test_05_impulse - đáp ứng xung
-    python scripts/view_fir_plots.py 6     # test_06_step    - đáp ứng bậc
-    python scripts/view_fir_plots.py 3 --window  # mở test 3 trong cửa sổ đồ thị (zoom/pan như MATLAB)
-    python scripts/view_fir_plots.py --window    # cửa sổ hình tổng hợp mixed + noise
-    python scripts/view_fir_plots.py 3 --regen   # vẽ lại từ outfeed/ rồi mở test 3
-    python scripts/view_fir_plots.py --list      # liệt kê test và trạng thái
-    python scripts/view_fir_plots.py --no-open   # chỉ sinh HTML
-"""
+'view_fir_plots.py - xem nhanh đồ thị FIR RTL vs Python trong trình duyệt.'
 
 import argparse
 import html

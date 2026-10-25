@@ -1,31 +1,7 @@
 `timescale 1ns/1ps
 `include "soc_pkg.vh"
 
-//======================================================================
 // tb_timer : unit test của rtl/Peripherals/timer.v (LEGACY + PERIODIC)
-//======================================================================
-// Clock 100 MHz (10 ns). Cổng bus giống axi_interconnect: wr_en / rd_en là
-// xung 1 chu kỳ, addr/wdata hợp lệ đúng chu kỳ đó; rdata chốt theo rd_en.
-//
-// Hai mô hình tham chiếu chạy song song, so sánh MỖI chu kỳ:
-//   - timer_legacy_ref: nguyên văn timer.v của commit HEAD (trước khi thêm
-//     chế độ periodic, chỉ đổi tên module, cuối file). Nhận mọi ghi/đọc vào
-//     offset không phải 0x04/0x08/0x0C -> chứng minh LEGACY không đổi.
-//   - mô hình periodic viết theo cách khác RTL ("hạn chót tuyệt đối": tick khi
-//     số cạnh kể từ mốc >= PERIOD), không dùng bộ đếm so sánh như RTL.
-//   irq của DUT phải == irq_ref_legacy | tick_model ở mọi chu kỳ.
-//
-// Quy ước đo: cyc = số thứ tự cạnh lên. Lệnh ghi đặt ở cạnh xuống được chốt
-// ở cạnh lên kế tiếp (last_wr_edge). Xung irq quan sát ở cạnh xuống sau cạnh
-// lên cyc được ghi là thời điểm cyc. "IRQ sau N clock" = irq_t - last_wr_edge.
-//
-// Test: T1 one-shot LEGACY (+ bí danh offset), T2 periodic PERIOD = 10000,
-//   T3 TICK_COUNT, T4 disable (kể cả trùng cạnh tick), T5 reset giữa chừng,
-//   T6 PERIOD 0/1/2, T7 off-by-one nhiều PERIOD, T8 one-shot mới / đổi chế độ /
-//   ghi lại CTRL / đổi PERIOD khi chạy, T9 ngẫu nhiên có reset so với mô hình.
-//
-// Chạy: python scripts/run_rtl_tests.py --vivado-root <Vivado> --tests tb_timer
-//======================================================================
 
 module tb_timer;
 
@@ -69,9 +45,7 @@ module tb_timer;
     integer cyc = 0;
     always @(posedge clk) cyc <= cyc + 1;
 
-    //------------------------------------------------------------
     // Errors
-    //------------------------------------------------------------
     integer errors = 0, checks = 0, msgs = 0;
 
     task fail;
@@ -99,9 +73,7 @@ module tb_timer;
         end
     endtask
 
-    //------------------------------------------------------------
     // IRQ log
-    //------------------------------------------------------------
 
     integer n_irq = 0;
     integer irq_t [0:MAX_IRQ_LOG-1];
@@ -109,9 +81,7 @@ module tb_timer;
     reg     width_check = 1'b1;
     integer cmp_cycles = 0, cmp_err = 0;
 
-    //------------------------------------------------------------
     // Periodic model (absolute-deadline formulation)
-    //------------------------------------------------------------
     reg [31:0] m_period = 0, m_ticks = 0, m_base = 0, m_e = 0, m_rd = 0;
     reg        m_en = 0, m_per = 0, m_tick = 0, tick_now;
 
@@ -145,9 +115,7 @@ module tb_timer;
         end
     end
 
-    //------------------------------------------------------------
     // Cycle-by-cycle comparison + IRQ log (negedge: all NBAs settled)
-    //------------------------------------------------------------
     always @(negedge clk) if ($time > 0) begin     // t=0: x->0 of clk is not a real cycle
         cmp_cycles = cmp_cycles + 1;
         if (irq !== (ref_irq | m_tick)) begin
@@ -165,9 +133,7 @@ module tb_timer;
         prev_irq = irq;
     end
 
-    //------------------------------------------------------------
     // Bus tasks
-    //------------------------------------------------------------
     integer last_wr_edge = 0;
 
     task wr;
@@ -249,9 +215,7 @@ module tb_timer;
         end
     endtask
 
-    //------------------------------------------------------------
     // Test sequence
-    //------------------------------------------------------------
     integer    n0, n1, e0, e1, i, k, first_gap, gap_min, gap_max, r_op;
     reg [31:0] v, t0, seed;
 
@@ -262,9 +226,7 @@ module tb_timer;
         rst_n = 1'b1;
         idle(3);
 
-        //==========================================================
         // T1: LEGACY one-shot (offset 0x00) unchanged
-        //==========================================================
         n0 = n_irq;
         wr(IDX_LEGACY, 32'd15);
         e0 = last_wr_edge;
@@ -294,9 +256,7 @@ module tb_timer;
         rd(4'd7, v);                           // alias read == timer_count
         $display("INFO T1 legacy one-shot: compare=15 -> IRQ after %0d clocks (original timer: 16)", first_gap);
 
-        //==========================================================
         // T2/T3: PERIODIC, PERIOD = 10000 (10 kHz at 100 MHz)
-        //==========================================================
         rd(IDX_CTRL, v);
         check_eq(v, 32'h4, "T2 CTRL after reset: disabled, PERIOD=0 invalid");
         wr(IDX_PERIOD, P10K);
@@ -342,9 +302,7 @@ module tb_timer;
         check_eq(irq_t[n0], e0 + 11 * P10K, "T8 CTRL rewrite: phase kept (tick 11)");
         check_eq(irq_t[n0 + 1], e0 + 12 * P10K, "T8 CTRL rewrite: phase kept (tick 12)");
 
-        //==========================================================
         // T4: disable (no extra IRQ), including on/around the tick edge
-        //==========================================================
         wait_edge(e0 + 12 * P10K + 3000);
         rd(IDX_TICK, t0);
         n0 = n_irq;
@@ -381,9 +339,7 @@ module tb_timer;
         expect_ticks(n0, e1, P10K, 2, "T4 re-enable: phase restarts at enable edge");
         wr(IDX_CTRL, 32'h0);
 
-        //==========================================================
         // T5: reset in the middle of counting
-        //==========================================================
         n0 = n_irq;
         wr(IDX_CTRL, 32'h3); e1 = last_wr_edge;
         wr(IDX_LEGACY, 32'd50000);             // legacy one-shot also in flight (fires after reset point)
@@ -406,9 +362,7 @@ module tb_timer;
         rd(IDX_TICK, v);   check_eq(v, 2, "T5 TICK_COUNT counts from reset");
         wr(IDX_CTRL, 32'h0);
 
-        //==========================================================
         // T6: invalid PERIOD (0, 1) and minimum PERIOD 2
-        //==========================================================
         wr(IDX_PERIOD, 32'd0);
         rd(IDX_TICK, t0);
         n0 = n_irq;
@@ -430,9 +384,7 @@ module tb_timer;
         check_eq(n_irq - n1, 0, "T6 PERIOD 2 -> 1 while running: ticks stop");
         wr(IDX_CTRL, 32'h0);
 
-        //==========================================================
         // T7: off-by-one for several PERIOD values
-        //==========================================================
         for (i = 0; i < 6; i = i + 1) begin
             k = (i == 0) ? 2 : (i == 1) ? 3 : (i == 2) ? 4 : (i == 3) ? 5 : (i == 4) ? 17 : P10K;
             wr(IDX_PERIOD, k);
@@ -444,9 +396,7 @@ module tb_timer;
             expect_ticks(n0, e1, k, 3, "T7 first tick at E0+P, then every P");
         end
 
-        //==========================================================
         // T8: new one-shot, mode switch, PERIOD change while running
-        //==========================================================
         wr(IDX_PERIOD, 32'd50);
         n0 = n_irq;
         wr(IDX_CTRL, 32'h1); e1 = last_wr_edge;      // ENABLE, one-shot
@@ -495,9 +445,7 @@ module tb_timer;
         wr(IDX_CTRL, 32'h0);
         idle(5);
 
-        //==========================================================
         // T9: random accesses + resets, checked every cycle vs models
-        //==========================================================
         width_check = 1'b0;                          // legacy and periodic may overlap here
         for (i = 0; i < 6000; i = i + 1) begin
             r_op = $random(seed) & 15;
@@ -540,11 +488,7 @@ module tb_timer;
 
 endmodule
 
-//======================================================================
 // timer_legacy_ref : rtl/Peripherals/timer.v at commit f748661 (before the
-// PERIODIC mode), verbatim except for the module name. Golden reference for
-// LEGACY behaviour. Do not edit.
-//======================================================================
 module timer_legacy_ref #(
 
     parameter WIDTH = `DATA_WIDTH
@@ -554,9 +498,7 @@ module timer_legacy_ref #(
     input  wire                 clk,
     input  wire                 rst_n,
 
-    //---------------------------------------------------------
     // AXI-Lite Interface
-    //---------------------------------------------------------
 
     input  wire                 wr_en,
     input  wire                 rd_en,
@@ -564,25 +506,19 @@ module timer_legacy_ref #(
 
     output reg  [WIDTH-1:0]     rdata,
 
-    //---------------------------------------------------------
     // Timer Interrupt
-    //---------------------------------------------------------
 
     output reg                  irq
 
 );
 
-    //---------------------------------------------------------
     // Timer Registers
-    //---------------------------------------------------------
 
     reg [WIDTH-1:0] timer_count;
     reg [WIDTH-1:0] timer_compare;
     reg             timer_enable;
 
-    //---------------------------------------------------------
     // Write Logic
-    //---------------------------------------------------------
 
     always @(posedge clk or negedge rst_n) begin
 
@@ -614,9 +550,7 @@ module timer_legacy_ref #(
 
     end
 
-    //---------------------------------------------------------
     // Counter Logic
-    //---------------------------------------------------------
 
     always @(posedge clk or negedge rst_n) begin
 
@@ -634,9 +568,7 @@ module timer_legacy_ref #(
 
     end
 
-    //---------------------------------------------------------
     // Interrupt Logic
-    //---------------------------------------------------------
 
     always @(posedge clk or negedge rst_n) begin
 
@@ -655,9 +587,7 @@ module timer_legacy_ref #(
 
     end
 
-//---------------------------------------------------------
 // Read Logic
-//---------------------------------------------------------
 
 always @(posedge clk or negedge rst_n) begin
 

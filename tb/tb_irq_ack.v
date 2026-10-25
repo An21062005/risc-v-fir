@@ -2,7 +2,6 @@
 `include "interrupt_pkg.vh"
 
 // Pin-level edge/ACK boundary verification, using the real controller.
-// irq[0] is Timer, irq[1] FIR. Stream tests separately prove sample conservation.
 module tb_irq_ack;
     reg clk=0, rst=1, ack=0;
     reg [1:0] raw=0, en=3;
@@ -16,7 +15,6 @@ module tb_irq_ack;
     integer errors=0, checks=0, source, target, delta, preload, k, cases=0;
     reg [1:0] expected, prior;
     // Independent specification: a new edge survives a simultaneous ACK;
-    // ACK clears only its explicitly named source, irrespective of priority.
     task step;
         input [1:0] pulse;
         input do_ack;
