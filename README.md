@@ -1,12 +1,15 @@
 # riscv-soc-fir-hls
 
+Mới đọc thiết kế: xem [lộ trình từ luồng chính đến từng test/khối RTL](docs/FIR_READING_GUIDE.md)
+và [hướng dẫn firmware, build và ảnh `.mem`](firmware/README.md).
+
 SoC RISC-V 32-bit (RV32I, pipeline 5 tầng) có bộ lọc **FIR 11 tap sinh bằng Vitis HLS**, nối qua
 bus AXI4-Lite cùng Timer, bộ điều khiển ngắt và RAM dữ liệu ngoài (tùy chọn). Toàn bộ thiết kế
 được kiểm chứng bằng mô phỏng XSim tự kiểm tra (self-checking) và đã tổng hợp bằng Vivado.
 
 | Hạng mục | Trạng thái hiện tại |
 |---|---|
-| Mô phỏng XSim | **56/56 cấu hình đạt yêu cầu**: 52 PASS + 4 negative test bị từ chối đúng dự kiến |
+| Mô phỏng XSim | Luồng chính 1000 mẫu mặc định; báo cáo 56 cấu hình trước khi tinh gọn được lưu ở mục 11 |
 | FIR HLS so với mô hình Python | bit-exact 6/6 bộ vector (6 000 mẫu), 1 000 mẫu × 6 dataset × 2 cấu hình RAM |
 | Vivado synthesis (cấu hình A) | **PASS**: 0 latch, 0 critical warning, nạp đủ 4 file khởi tạo bộ nhớ |
 | Timing 100 MHz (sau place & route) | **FAIL**: WNS −3,247 ns, Fmax ≈ 75 MHz (75 MHz và 50 MHz đạt) |
@@ -107,7 +110,8 @@ riscv-soc-fir-hls/
 │   ├── filelist_fir11.f        danh sách nguồn cấu hình A
 │   └── filelist_ext_ram_sim.f  thêm cho cấu hình B/C
 ├── tb/                         testbench self-checking; asm/irq_dir.S (ảnh lệnh cho tb_cpu_irq_c4)
-├── firmware/                   firmware C/ASM, startup*.S, linker*.ld (build/ sinh ra, gitignore)
+├── firmware/                   một firmware fir_timer_1000.c + ISR/MMIO/startup/linker;
+│                               build/ sinh ra, gitignore
 ├── fpga/                       soc_top.xdc (clock 100 MHz), synth_soc.tcl (Vivado non-project)
 ├── hls/FIR11/FIR11/            nguồn C HLS (fir.cpp, fir.h) + syn/verilog, syn/report
 ├── scripts/                    run_rtl_tests.py, build_firmware.py, run_vivado_synth.py,
@@ -129,7 +133,7 @@ riscv-soc-fir-hls/
 
 | Cấu hình | Tham số `soc_top` | Danh sách file | Dùng cho |
 |---|---|---|---|
-| **A** (mặc định) | `ENABLE_EXT_RAM=0` | `rtl/filelist_fir11.f` | mô phỏng **và** FPGA; không có RAM ngoài |
+| **A** (mặc định RTL) | `ENABLE_EXT_RAM=0` | `rtl/filelist_fir11.f` | kiểm khối RTL; không đủ RAM ngoài cho firmware chính |
 | **B** | `ENABLE_EXT_RAM=1 EXT_RAM_USE_CACHE=0` | + `rtl/filelist_ext_ram_sim.f` | chỉ mô phỏng: RAM ngoài, không cache |
 | **C** | `ENABLE_EXT_RAM=1 EXT_RAM_USE_CACHE=1` | + `rtl/filelist_ext_ram_sim.f` | chỉ mô phỏng: RAM ngoài có cache |
 
@@ -215,33 +219,36 @@ Các lệnh dưới đây chạy trong **Git Bash** tại thư mục gốc proje
 
 ## 6. Firmware
 
-```bash
-python scripts/build_firmware.py --firmware <tên>     # -> firmware/build/[<tên>/] program.mem, data.mem, .elf, .dis, .map
+Project chỉ giữ [firmware/fir_timer_1000.c](firmware/fir_timer_1000.c): Timer IRQ
+điều phối 1000 mẫu từ RAM ngoài vào FIR HLS, FIR IRQ trả kết quả về RAM ngoài.
+
+```text
+firmware/
+├── fir_timer_1000.c     main: khởi tạo, bật Timer/ngắt, chờ đủ mẫu, kiểm kết quả
+├── fir_timer_isr.h      try_send(), irq_handler(), trạng thái fst
+├── soc_mmio.h           địa chỉ thanh ghi nhìn từ CPU
+├── fir_1000_data.h      số mẫu, địa chỉ input/output, checksum được sinh tự động
+├── startup_irq.S        reset tại 0, vector ngắt 0x10, lưu/khôi phục thanh ghi
+├── linker_irq.ld        IMEM/DMEM 1 KB, stack 256 byte
+└── build/               ảnh sinh tự động (gitignore)
 ```
 
-| Firmware | Nguồn | Chức năng | Testbench |
-|---|---|---|---|
-| `smoke` | `main.c` | CPU chạy C do GCC build, 12 kết quả trong signature | `tb_cpu_firmware` |
-| `fir_smoke` | `fir_smoke.c` | ghi 1 mẫu vào FIR qua AXI, chờ DONE, đọc kết quả | `tb_cpu_fir_firmware` |
-| `fir_stream` | `fir_stream.c` | 32 mẫu DMEM → FIR → DMEM (polling) | `tb_cpu_fir_stream` |
-| `ext_ram_test` | `ext_ram_test.c` | lw/sw RAM ngoài 64 KB | `tb_cpu_ext_ram_b/_c` |
-| `fir_1000` | `fir_1000.c` | 1 000 mẫu RAM ngoài → FIR → RAM ngoài (polling) | `tb_cpu_fir_1000/_c` |
-| `timer_irq_test` | `timer_irq_test.c` | Timer IRQ định kỳ → ISR → ACK → `mret`, kiểm ngữ cảnh | `tb_cpu_timer_irq_a/b/c` |
-| `fir_timer` / `fir_timer_stress` | `fir_timer.c` | Timer IRQ 10 kHz điều phối 32 mẫu, FIR IRQ trả kết quả (stress: PERIOD 100) | `tb_cpu_fir_timer[_stress]` |
-| `fir_timer_1000` / `_stress` | `fir_timer_1000.c` | như trên với 1 000 mẫu trong RAM ngoài | `tb_cpu_fir_timer_1000_*` |
+```bash
+python scripts/build_firmware.py
+```
 
-Firmware IRQ dùng `startup_irq.S` + `linker_irq.ld` (vector `0x10` lưu thanh ghi caller-saved, gọi
-ISR C trong `fir_timer_isr.h`, `mret`). Các firmware khác dùng `startup.S` + `linker.ld`.
+Mặc định build `fir_timer_1000` vào `firmware/build/fir_timer_1000/`:
+`program.mem`, `data.mem`, `symbols.mem`, ELF, disassembly, map và báo cáo.
+`fir_timer_1000_stress` dùng cùng nguồn, chỉ đổi PERIOD=100 để kiểm quá tải.
+Runner tạo header theo dataset và build ảnh riêng cho từng lần mô phỏng.
 
-Ràng buộc của CPU mà `build_firmware.py` kiểm tự động:
+Luồng chính cần RAM ngoài, hiện chạy trong mô phỏng B/C. CPU hỗ trợ tập con
+RV32I; build script kiểm ISA và dung lượng bộ nhớ. MMIO dùng word 32-bit
+`volatile`; `mret` chỉ được phép tại `__trap_mret`. Sinh/kiểm dữ liệu bằng
+`python scripts/gen_fir_1000_data.py [--check]`.
 
-- `-march=rv32i -mabi=ilp32 -Os`, không libc/libgcc; IMEM 1 KB, DMEM 1 KB (stack 256 byte ở cuối).
-- CPU không đọc dữ liệu từ IMEM: mọi hằng số nằm trong DMEM, nạp qua `data.mem`.
-- **Từ chối** các lệnh CPU giải mã sai dù thuộc RV32I: `lb/lh/lbu/lhu/sb/sh`, `bltu/bgeu`,
-  `sltu/sltiu`, cùng RV32M, FENCE, SYSTEM (riêng `mret` chỉ được phép ở `__trap_mret`).
-  Vì vậy firmware chỉ dùng `int`, không dùng `char`/`short`/`unsigned`, nhân/chia hay thư viện C.
-- Dữ liệu sinh tự động có sẵn trong repo; sinh lại hoặc kiểm bằng
-  `python scripts/gen_fir_stream_data.py [--check]` và `python scripts/gen_fir_1000_data.py [--check]`.
+Xem [hướng dẫn firmware và nạp ảnh](firmware/README.md) và
+[lộ trình theo một luồng chính](docs/FIR_READING_GUIDE.md).
 
 ## 7. Mô phỏng và regression
 
@@ -250,17 +257,17 @@ Script [run_rtl_tests.py](scripts/run_rtl_tests.py) compile (`xvlog`), elaborate
 `TEST PASSED` và không có `ERROR`, `FATAL`, `TEST FAILED`. Log: `outfeed/<test>/simulate.log`.
 
 ```bash
-# Regression mặc định: 20 cấu hình (khối FIR, AXI, AXI fault, RAM ngoài, CPU bus/fault, Timer,
-# ngắt, I1/C4, pipeline)
+# Mặc định: luồng chính 1000 mẫu, RAM ngoài không cache (B)
 python scripts/run_rtl_tests.py --vivado-root D:/vivado/2026.1/Vivado
 
-# Firmware + IRQ + 1 000 mẫu (20 cấu hình) và ma trận 6 dataset x B/C (12 cấu hình)
-python scripts/run_rtl_tests.py --vivado-root D:/vivado/2026.1/Vivado --fir-matrix --tests \
-  tb_cpu_firmware tb_cpu_fir_firmware tb_cpu_fir_stream tb_cpu_ext_ram_b tb_cpu_ext_ram_c \
-  tb_cpu_fir_1000 tb_cpu_fir_1000_c tb_cpu_timer_irq_a tb_cpu_timer_irq_b tb_cpu_timer_irq_c \
-  tb_cpu_fir_timer tb_cpu_fir_timer_stress tb_cpu_fir_timer_1000_b tb_cpu_fir_timer_1000_c \
-  tb_cpu_fir_timer_1000_stress_b tb_cpu_fir_timer_1000_stress_c tb_cpu_fir_timer_1000_reset_b \
-  tb_cpu_fir_timer_1000_reset_c tb_cpu_fir_timer_1000_late_b tb_cpu_fir_timer_1000_late_c
+# Cùng ứng dụng với cache (C)
+python scripts/run_rtl_tests.py --vivado-root D:/vivado/2026.1/Vivado --tests tb_cpu_fir_timer_1000_c
+
+# Ma trận sáu dataset trong B/C
+python scripts/run_rtl_tests.py --vivado-root D:/vivado/2026.1/Vivado --fir-matrix
+
+# Kiểm các khối RTL và luồng chính B/C
+python scripts/verify_phase41.py --vivado-root D:/vivado/2026.1/Vivado --suite regression
 
 # 4 negative test: PHẢI kết thúc bằng TEST FAILED với lỗi ngân sách thời gian (chạy từng test)
 python scripts/run_rtl_tests.py --vivado-root D:/vivado/2026.1/Vivado --tests tb_cpu_fir_timer_1000_timing_fault_b
@@ -281,7 +288,6 @@ song song các nhóm này và tự kiểm lý do "đỏ" của negative test.
 | `--output DIR` | thư mục kết quả (mặc định `outfeed/`) |
 | `--wave` / `--open-wave TB` | ghi waveform `outfeed/<tb>/<tb>.wdb` / mở trong XSim GUI |
 | `--rtl-root DIR` | chạy trên một bản RTL khác (ví dụ mutant) |
-| `--no-firmware-build` | dùng lại image firmware đã build |
 | `--firmware-src DIR` | nguồn firmware khác (thử nghiệm đột biến) |
 | `--vector-dir DIR`, `--outfeed-dir DIR` | bộ vector khác / nơi ghi `actual.dat` cho `tb_fir11_vectors` |
 
@@ -301,7 +307,7 @@ Compile cả SoC: lấy nguồn trong `rtl/filelist_fir11.f` (+ `rtl/filelist_ex
 
 ## 8. Danh sách testbench
 
-**Regression mặc định (20 cấu hình)**
+**Kiểm khối RTL (20 cấu hình, chọn qua `--tests` hoặc suite regression)**
 
 | Testbench | Kiểm tra |
 |---|---|
@@ -319,9 +325,9 @@ Compile cả SoC: lấy nguồn trong `rtl/filelist_fir11.f` (+ `rtl/filelist_ex
 | `tb_cpu_irq_c4_a` / `_b` / `_c` | ACK sát `mret`, ngắt chen giữa ACK/`mret` (lỗi C4), dùng ảnh `tb/asm/irq_dir.S` |
 | `tb_id_ex_reg`, `tb_cpu_flush_hold_b` / `_c` | thanh ghi ID/EX khi flush và hold cùng lúc |
 
-**Firmware và ứng dụng (36 cấu hình, gọi tên qua `--tests`)**: các testbench trong bảng
-[mục 6](#6-firmware), cộng các biến thể của `tb_cpu_fir_timer_1000`: 6 dataset × B/C, `stress`,
-`reset`, `late` (B/C) và 4 negative test `timing_fault`/`jitter_fault` (B/C).
+**Ứng dụng chính (24 cấu hình)**: `tb_cpu_fir_timer_1000_b/_c`, ma trận 6 dataset × B/C,
+`stress`, `reset`, `late` (B/C) và 4 negative test `timing_fault`/`jitter_fault` (B/C).
+Mặc định chỉ chạy `tb_cpu_fir_timer_1000_b`.
 Testbench không tin signature của firmware: chúng quan sát giao dịch CPU/AXI/FIR/RAM và so với mô
 hình tham chiếu riêng.
 
@@ -419,7 +425,7 @@ axi_interconnect: WRITE_FSM / READ_FSM (giữ yêu cầu tới done, timeout -> 
 
 **Giới hạn FPGA**: `sdram_top` chứa luôn `sdram_model` và **không có chân ra ngoài**. Vivado tổng hợp được
 (64 KB → 17 BRAM36 ở cấu hình C) nhưng đó chỉ là BRAM bọc trong giao thức lệnh SDRAM, không phải
-chip SDRAM trên board. Trên FPGA hãy dùng cấu hình A. Cần thêm RAM thì thay `sdram_top` bằng backend
+chip SDRAM trên board. Luồng chính cần thay `sdram_top` bằng backend
 BRAM trên cùng giao diện `cpu_*` (module `main_memory` trong `cache_controller.v` là tham chiếu, hiện
 không được instance) hoặc một controller/PHY SDRAM thật theo board.
 
@@ -428,7 +434,7 @@ bootloader/UART/DMA để nạp dữ liệu, SoC chưa có.
 
 ## 11. Kết quả kiểm chứng
 
-Regression XSim 2026.1 trên RTL hiện tại (chi tiết: [docs/PHASE5_VERIFICATION.md](docs/PHASE5_VERIFICATION.md)):
+Kết quả lịch sử trước khi bỏ firmware phụ; bảng này không phải danh sách test hiện hành (chi tiết: [docs/PHASE5_VERIFICATION.md](docs/PHASE5_VERIFICATION.md)):
 
 | Nhóm | Cấu hình | Kết quả |
 |---|---|---|
@@ -453,11 +459,12 @@ Các lỗi đã sửa và kiểm chứng ở giai đoạn gần nhất:
 ## 12. Synthesis và timing
 
 ```bash
-# cấu hình A, firmware fir_timer, synth + place & route, không tạo bitstream
-python scripts/run_vivado_synth.py --vivado-root D:/vivado/2026.1/Vivado --impl
-# chỉ synth cấu hình C (kiểm sdram_model)
+# Kiểm synthesis cấu hình C với firmware chính; không tạo bitstream, không nạp input RAM
 python scripts/run_vivado_synth.py --vivado-root D:/vivado/2026.1/Vivado --cfg C
 ```
+
+Script mặc định dùng cấu hình C và `fir_timer_1000`. Các số liệu A/C dưới đây
+là kết quả lịch sử trước khi tinh gọn firmware; không phải đo lại của lần thay đổi này.
 
 Part `xc7z020clg484-1` (cùng part với báo cáo HLS; dùng để ước lượng tài nguyên/timing, board chưa
 xác định). Ràng buộc: [fpga/soc_top.xdc](fpga/soc_top.xdc) chỉ có clock 100 MHz, chưa gán chân.
@@ -486,7 +493,8 @@ Project **mới được kiểm chứng bằng mô phỏng và synthesis/impleme
    `cpu_irq`, `bus_error` vào XDC (nếu thiếu, `write_bitstream` sẽ dừng ở DRC NSTD/UCIO).
 2. **Clock**: 100 MHz không đạt timing. Dùng ≤ 75 MHz (khuyên 50 MHz qua MMCM) hoặc sửa pipeline CPU.
    Khi đổi clock, chỉnh `FIR_TIMER_PERIOD` trong firmware (10 kHz = f_clk / 10 000).
-3. **Bộ nhớ**: dùng cấu hình A; B/C chỉ để mô phỏng (mục 10).
+3. **Bộ nhớ**: luồng chính cần RAM ngoài B/C. Thay backend mô phỏng bằng RAM triển khai được
+   trên board và bổ sung cơ chế nạp input/đọc output; cấu hình A không đủ cho firmware chính.
 4. **Quan sát**: chỉ có 2 chân trạng thái; cần thêm UART/GPIO hoặc ILA để đọc kết quả.
 5. **Firmware cố định lúc synthesis** (IMEM/DMEM `$readmemh`): đổi chương trình thì synth lại hoặc
    dùng `updatemem`.
@@ -499,11 +507,11 @@ lỗi bus không gây trap (phần mềm đọc BUSERR); chưa kiểm chứng IS
 
 | Tài liệu | Nội dung | Trạng thái |
 |---|---|---|
-| [docs/PHASE5_VERIFICATION.md](docs/PHASE5_VERIFICATION.md) | I1/C4, AXI lỗi/timeout, reset sync, regression 56/56, synthesis/timing | **hiện tại** |
+| [docs/PHASE5_VERIFICATION.md](docs/PHASE5_VERIFICATION.md) | I1/C4, AXI lỗi/timeout, reset sync, regression 56/56, synthesis/timing | báo cáo lịch sử trước khi tinh gọn |
 | [docs/PHASE41_VERIFICATION.md](docs/PHASE41_VERIFICATION.md) | Giai đoạn 4.1: deadline checker, ma trận dataset, negative test | lịch sử (trước Phase 5) |
 | [docs/RTL_FIX_VERIFICATION.md](docs/RTL_FIX_VERIFICATION.md) | sửa lỗi AXI/FIR ban đầu, firmware Bước 1–4, Timer/FIR IRQ Giai đoạn 1–4 | lịch sử (trước Phase 5) |
 
-Hai báo cáo lịch sử ghi đúng trạng thái tại thời điểm đó; các điểm đã thay đổi được đánh dấu ở đầu mỗi file.
+Các báo cáo kiểm chứng ghi đúng trạng thái tại thời điểm đó; các điểm đã thay đổi được đánh dấu ở đầu mỗi file.
 
 ## 15. Lưu ý khi sử dụng
 

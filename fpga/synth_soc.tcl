@@ -3,7 +3,7 @@
 # vivado -mode batch -source fpga/synth_soc.tcl -tclargs <project> <image dir> <out dir> [impl] [cfg]
 #   <image dir> : firmware image with program.mem + data.mem (scripts/build_firmware.py)
 #   impl        : 1 = also opt/place/route and report post-route timing (no bitstream)
-#   cfg         : A (default, ENABLE_EXT_RAM=0) or C (ext RAM + cache, sdram_top: synthesis check only)
+#   cfg         : C (ext RAM + cache, synthesis check only; main firmware needs RAM)
 # Wrapper: python scripts/run_vivado_synth.py (builds the firmware, runs this script, checks logs).
 #
 # Memory initialisation (F3): IMEM/DMEM use $readmemh("program.mem"/"data.mem") and the FIR11
@@ -15,7 +15,7 @@ set proj   [file normalize [lindex $argv 0]]
 set image  [file normalize [lindex $argv 1]]
 set out    [file normalize [lindex $argv 2]]
 set impl   [expr {[llength $argv] > 3 ? [lindex $argv 3] : 0}]
-set cfg    [expr {[llength $argv] > 4 ? [lindex $argv 4] : "A"}]
+set cfg    [expr {[llength $argv] > 4 ? [lindex $argv 4] : "C"}]
 set part   xc7z020clg484-1   ;# resource/timing reference only; board/pins not specified
 
 file mkdir $out

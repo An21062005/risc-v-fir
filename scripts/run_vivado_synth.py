@@ -1,7 +1,7 @@
 """Synthesize soc_top with Vivado (batch, non-project) and check the results.
 
-  python scripts/run_vivado_synth.py --vivado-root D:/vivado/2026.1/Vivado [--impl] [--cfg A|C]
-                                     [--firmware fir_timer] [--output outfeed/synth_<cfg>]
+  python scripts/run_vivado_synth.py --vivado-root D:/vivado/2026.1/Vivado [--impl] [--cfg C]
+                                     [--firmware fir_timer_1000] [--output outfeed/synth_<cfg>]
 
 Steps: build the firmware image (scripts/build_firmware.py -> <output>/fw), run
 fpga/synth_soc.tcl (top soc_top, fpga/soc_top.xdc 100 MHz clock), then check vivado.log:
@@ -24,9 +24,11 @@ def main():
     project = Path(__file__).resolve().parent.parent
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--vivado-root", type=Path, required=True)
-    ap.add_argument("--cfg", choices=("A", "C"), default="A")
+    ap.add_argument("--cfg", choices=("C",), default="C",
+                    help="synthesis check with external RAM; not a board-ready memory backend")
     ap.add_argument("--impl", action="store_true", help="also opt/place/route (post-route timing)")
-    ap.add_argument("--firmware", default="fir_timer", help="image for IMEM/DMEM (default fir_timer: Timer+FIR IRQ)")
+    ap.add_argument("--firmware", choices=("fir_timer_1000", "fir_timer_1000_stress"),
+                    default="fir_timer_1000", help="main firmware image for IMEM/DMEM")
     ap.add_argument("--output", type=Path)
     args = ap.parse_args()
     out = (args.output or project / "outfeed" / f"synth_{args.cfg}").resolve()
@@ -47,6 +49,8 @@ def main():
                         "-source", str(project / "fpga" / "synth_soc.tcl"), "-tclargs",
                         str(project), str(fw), str(out), "1" if args.impl else "0", args.cfg],
                        cwd=out, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+    if not log.is_file():
+        sys.exit(f"Vivado did not create {log} (launcher exit {r.returncode}); check the Vivado installation/environment")
     text = log.read_text(encoding="utf-8", errors="replace")
     problems = []
     if r.returncode != 0 or "SYNTH_SOC_DONE" not in text:

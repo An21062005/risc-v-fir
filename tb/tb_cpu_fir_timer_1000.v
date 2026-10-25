@@ -5,8 +5,8 @@
 //======================================================================
 // Firmware: firmware/fir_timer_1000.c (+ fir_timer_isr.h, startup_irq.S, linker_irq.ld)
 //   build_firmware.py --firmware fir_timer_1000
-// Dữ liệu : data_test/fir_1000/{input,expected,layout}.mem (scripts/gen_fir_1000_data.py, giống
-//           tb_cpu_fir_1000.v). Testbench CHỈ nạp input.mem vào sdram_model trước reset.
+// Dữ liệu : data_test/fir_1000/{input,expected,layout}.mem (scripts/gen_fir_1000_data.py).
+// Testbench CHỈ nạp input.mem vào sdram_model trước reset.
 // SoC     : soc_top #(ENABLE_EXT_RAM=1, EXT_RAM_USE_CACHE=USE_CACHE), clock 100 MHz.
 // symbols.mem: fst, __stack_limit, __stack_top, __trap_entry, __trap_mret, __isr_end.
 //

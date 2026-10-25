@@ -1,14 +1,12 @@
 /*
- * fir_timer_isr.h - ISR dùng chung cho firmware Timer IRQ + FIR IRQ
- *   fir_timer.c      (Giai đoạn 3: 32 mẫu trong DMEM)
- *   fir_timer_1000.c (Giai đoạn 4: 1000 mẫu trong RAM ngoài)
- * Giai đoạn 4.1: live deadline clock through final output; shared by both stream sizes.
+ * fir_timer_isr.h - ISR của fir_timer_1000.c: Timer IRQ + FIR IRQ, RAM ngoài.
+ * Live deadline clock through the final output store.
  *
  * Trước khi #include, file nguồn phải định nghĩa:
  *   FT_N        số mẫu (mask Timer IRQ at FT_N; clock stops after final output)
- *   FT_IN(i)    biểu thức đọc mẫu vào thứ i      (DMEM hoặc RAM ngoài)
- *   FT_OUT(i)   lvalue lưu kết quả thứ i          (DMEM hoặc RAM ngoài)
- * Header định nghĩa thanh ghi MMIO, fir_state_t fst, try_send() và irq_handler() (gọi từ
+ *   FT_IN(i)    biểu thức đọc mẫu vào thứ i      (RAM ngoài)
+ *   FT_OUT(i)   lvalue lưu kết quả thứ i          (RAM ngoài)
+ * Header dùng bản đồ thanh ghi soc_mmio.h, định nghĩa fir_state_t fst, try_send() và irq_handler() (gọi từ
  * __trap_entry của startup_irq.S với -DIRQ_C_HANDLER=irq_handler). Hai hàm nằm trong .text.isr
  * (linker_irq.ld đặt ngay sau trap entry -> [__trap_entry, __isr_end) = mã ngữ cảnh ngắt).
  *
@@ -30,18 +28,7 @@
 #define FIR_TIMER_ISR_H
 
 #include <stdint.h>
-
-#define MMIO(a)         (*(volatile uint32_t *)(a))
-#define TIMER_PERIOD    MMIO(0x40000084u)
-#define TIMER_CTRL      MMIO(0x40000088u)
-#define TIMER_TICKS     MMIO(0x4000008Cu)
-#define INT_ENABLE      MMIO(0x400001C0u)
-#define INT_ACK         MMIO(0x400001C8u)
-#define INT_STATUS      MMIO(0x400001CCu)
-#define FIR_DATA_IN     MMIO(0x40000200u)
-#define FIR_DATA_OUT    MMIO(0x40000204u)
-#define FIR_STATUS      MMIO(0x40000208u)
-#define FIR_CTRL        MMIO(0x4000020Cu)
+#include "soc_mmio.h"
 
 #define CODE_TIMER      1u                         /* STATUS/ACK = (id << 1) | 1, IRQ_TIMER = 0 */
 #define CODE_FIR        3u                         /* IRQ_FIR = 1 */
@@ -50,11 +37,11 @@
 #define ST_DONE         1u
 #define ST_BUSY_OVR     0x18u                      /* FIR STATUS BUSY | OVERRUN */
 
-/* Chỉ ISR ghi; main đọc sau một hàm ngoài (reg_integrity_run) hoặc qua con trỏ volatile. */
+/* Chỉ ISR ghi; main đọc qua con trỏ volatile. */
 typedef struct {
     int32_t ticks;          /* +0  TICK_COUNT ở lần ISR Timer gần nhất */
     int32_t sent;           /* +4  số mẫu đã ghi DATA_IN */
-    int32_t done;           /* +8  số output đã lưu (REGTEST_COUNTER=fst+8) */
+    int32_t done;           /* +8  số output đã lưu */
     int32_t missed;         /* +12 conservative deadline misses observed after completed stores */
     int32_t max_backlog;    /* +16 max(mẫu đến hạn - mẫu xong) tại ISR Timer */
     int32_t coalesced;      /* +20 tick bị gộp ở interrupt controller */

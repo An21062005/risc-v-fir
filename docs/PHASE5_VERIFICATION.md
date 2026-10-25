@@ -1,3 +1,8 @@
+> Lưu trữ lịch sử: các firmware phụ và testbench tương ứng đã được bỏ khi tinh gọn project.
+> Các tên/lệnh/kết quả bên dưới mô tả trạng thái tại thời điểm kiểm chứng.
+> Luồng hiện hành: [fir_timer_1000.c](../firmware/fir_timer_1000.c); xem
+> [hướng dẫn hiện tại](../firmware/README.md) để build và chạy.
+
 # Phase 5 — I1/C4, AXI errors/timeout (A1/A2), FPGA preparation (S1/S3/S4/F3) — 2026-10-21
 
 ## Changes

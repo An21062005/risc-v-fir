@@ -1,3 +1,8 @@
+> Lưu trữ lịch sử: các firmware phụ và testbench tương ứng đã được bỏ khi tinh gọn project.
+> Các tên/lệnh/kết quả bên dưới mô tả trạng thái tại thời điểm kiểm chứng.
+> Luồng hiện hành: [fir_timer_1000.c](../firmware/fir_timer_1000.c); xem
+> [hướng dẫn hiện tại](../firmware/README.md) để build và chạy.
+
 # Giai đoạn 4.1 — deadline checker và verification trước synthesis
 
 > **Báo cáo lịch sử (Giai đoạn 4.1, trước Phase 5).** Kết quả dưới đây mô tả RTL tại thời điểm đó.
@@ -58,7 +63,7 @@ Các số đo trên được kiểm bằng log của cả sáu dataset ở mỗi
 | tick cuối → store cuối trong ca delay | 20230 clock | 20214 clock |
 | Miss TB/firmware và mã thoát trong ca delay | 1/1, exit 6 | 1/1, exit 6 |
 
-Firmware cũ nguyên bản còn được giữ trong `outfeed/phase41_baseline/firmware`
+Firmware cũ nguyên bản còn được giữ trong `D:/SoC/verification_evidence/phase41_2026-10-21/phase41_baseline/firmware` (bản lưu cục bộ, ngoài repo)
 và chạy với cùng stimulus: store cuối ở +20232 clock, `tb_missed=1`,
 `fst.missed=0`, firmware exit 0. Mutation tái lập bằng script cũng cho
 miss 1/0, exit 0 (+20227 clock với phần tối ưu gửi/backlog mới).
@@ -94,7 +99,7 @@ Regression đầy đủ:
 | `tb_cpu_fir_timer_1000_b` | 83 | 10032106 | PASS |
 | `tb_cpu_fir_timer_1000_c` | 83 | 10035454 | PASS |
 
-`outfeed/phase41_final/results.json` chứa các kết quả từng run và đường dẫn log;
+`D:/SoC/verification_evidence/phase41_2026-10-21/phase41_final/results.json` chứa các kết quả từng run và đường dẫn log;
 `artifact_validation.json` chứa đối chiếu 20 stream và hash fixture/image.
 
 ## Thay đổi và cơ chế deadline
@@ -223,7 +228,7 @@ python scripts/verify_phase41.py --vivado-root D:/vivado/2026.1/Vivado --suite m
 ```
 
 Mặc định output `outfeed/phase41`; bằng chứng của lần thực hiện này dùng
-`--output outfeed/phase41_final`. Mỗi suite có `summary.json`. Mỗi test có
+`--output outfeed/phase41_final` (đã chuyển sang `D:/SoC/verification_evidence/phase41_2026-10-21/phase41_final`). Mỗi suite có `summary.json`. Mỗi test có
 `runner.log` và thư mục con chứa compile/elaborate/simulate logs, fixture,
 firmware ELF/disassembly/build report và provenance. Mutation expected-red
 chỉ đạt khi XSim đã chạy, có TEST FAILED và đúng thông báo phát hiện lỗi;

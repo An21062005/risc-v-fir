@@ -1,42 +1,16 @@
-"""Run self-checking RTL tests with Vivado XSim, including a strict log gate.
+"""Run the main 1000-sample SoC application and block-level RTL checks with XSim.
 
-Example (Windows):
   python scripts/run_rtl_tests.py --vivado-root D:/vivado/2026.1/Vivado
-All generated files live in --output (default: <project>/outfeed):
-  outfeed/<testbench>/        XSim build, logs, HLS .dat copies
-  outfeed/<test>/actual.dat   FIR RTL results of tb_fir11_vectors
---rtl-root allows running the same regression against a saved RTL baseline.
 
-Optional (not part of the default regression, run by name):
-Default list also includes tb_irq_i1 and tb_cpu_irq_c4_a/_b/_c (I1/C4); the latter
-assemble tb/asm/irq_dir.S with the RISC-V GCC next to Vivado (<vivado>/../gnu/riscv/nt/bin).
-  --tests tb_cpu_firmware   build firmware/ with GCC (scripts/build_firmware.py),
-                            copy firmware/build/program.mem + data.mem into
-                            outfeed/tb_cpu_firmware/ and run the C firmware on the CPU.
-  --tests tb_cpu_fir_firmware
-                            same for firmware/fir_smoke.c (build_firmware.py
-                            --firmware fir_smoke -> firmware/build/fir_smoke/):
-                            the CPU drives the FIR11 HLS IP over AXI.
-  --tests tb_cpu_fir_stream same for firmware/fir_stream.c (--firmware fir_stream ->
-                            firmware/build/fir_stream/, also copies symbols.mem):
-                            32 samples DMEM -> FIR over AXI -> DMEM.
-  --tests tb_cpu_ext_ram_b tb_cpu_ext_ram_c
-                            firmware/ext_ram_test.c: CPU lw/sw on the 64 KB external
-                            RAM (soc_top ENABLE_EXT_RAM=1, B = no cache, C = cache).
-  --tests tb_cpu_timer_irq_a tb_cpu_timer_irq_b tb_cpu_timer_irq_c
-                            firmware/timer_irq_test.c: Timer periodic 10 kHz -> IRQ -> ISR
-                            (vector 0x10) -> ACK -> mret; A = no ext RAM, B/C = ext RAM.
-  --tests tb_cpu_fir_timer tb_cpu_fir_timer_stress
-                            firmware/fir_timer.c: Timer IRQ 10 kHz paces 32 FIR samples, FIR IRQ
-                            returns results (stress: PERIOD 100, deliberate overload).
-  --tests tb_cpu_fir_timer_1000_b tb_cpu_fir_timer_1000_c
-                            firmware/fir_timer_1000.c: Timer IRQ 10 kHz paces 1000 samples from the
-                            external RAM, FIR IRQ stores results back (B = no cache, C = cache).
-                            ~10 M cycles each.
-  --tests tb_cpu_fir_1000 tb_cpu_fir_1000_c
-                            firmware/fir_1000.c: 1000 samples external RAM -> FIR ->
-                            external RAM; data from data_test/fir_1000/ (generate with
-                            scripts/gen_fir_1000_data.py). Long run (~1-2 min each).
+By default this builds fir_timer_1000.c and runs tb_cpu_fir_timer_1000_b
+(external RAM, no cache). Use --tests tb_cpu_fir_timer_1000_c for cache,
+--fir-matrix for six datasets in B/C, or --tests to select block-level checks.
+The stress/reset/late variants verify the same application.
+
+Generated images, logs, provenance and actual.dat live in outfeed/<test>/.
+Each main application run generates its dataset header and builds matching
+firmware in outfeed/<test>/firmware_build/. A pass requires TEST PASSED and
+no ERROR/FATAL/TEST FAILED. --rtl-root selects alternate RTL for verification.
 """
 
 import argparse
@@ -98,9 +72,6 @@ def main():
     parser.add_argument("--wave", action="store_true",
                         help="elaborate with -debug typical and log all signals to "
                              "<output>/<test>/<test>.wdb")
-    parser.add_argument("--no-firmware-build", action="store_true",
-                        help="firmware tests: use the existing firmware/build[/<fw>]/*.mem "
-                             "instead of rebuilding with GCC")
     parser.add_argument("--open-wave", metavar="TEST",
                         help="open <output>/TEST/TEST.wdb in the XSim GUI and exit "
                              "(run once with --wave first)")
@@ -195,7 +166,7 @@ def main():
         outfeed_dir = output / "tb_fir11_vectors" / "actual"
     else:
         outfeed_dir = output
-    if "tb_fir11_vectors" in (args.tests or ["tb_fir11_vectors"]):
+    if "tb_fir11_vectors" in (args.tests or []):
         # xsim -testplusarg cannot carry spaces; it hangs instead of failing.
         for label, path in (("--vector-dir", vector_dir), ("--output", output),
                             ("--outfeed-dir", outfeed_dir)):
@@ -226,10 +197,8 @@ def main():
         ("tb_cpu_irq_c4_b", ["EXT_RAM=1", "USE_CACHE=0"]),
         ("tb_cpu_irq_c4_c", ["EXT_RAM=1", "USE_CACHE=1"]),
     ]
-    default_tests = [name for name, _ in tests]
-    # Optional: needs the RISC-V GCC toolchain, so it only runs when named.
-    # Firmware testbench: build_firmware.py --firmware, image directory, image files,
-    # testbench top, generics, extra data files (copied into the run directory), xsim timeout.
+    default_tests = ["tb_cpu_fir_timer_1000_b"]
+    # Only the main application has firmware images; block checks use directed fixtures.
     images = ("program.mem", "data.mem")
     fw_build = project / "firmware" / "build"
     fir_1000_data = [project / "data_test" / "fir_1000" / f
@@ -238,41 +207,6 @@ def main():
         return dict(fw=fw, build=build, files=files, top=top, generics=list(generics),
                     data=list(data), timeout=timeout)
     firmware_tests = {
-        "tb_cpu_firmware": firmware_test("smoke", fw_build),
-        "tb_cpu_fir_firmware": firmware_test("fir_smoke", fw_build / "fir_smoke"),
-        "tb_cpu_fir_stream": firmware_test("fir_stream", fw_build / "fir_stream",
-                                           images + ("symbols.mem",)),
-        "tb_cpu_ext_ram_b": firmware_test("ext_ram_test", fw_build / "ext_ram_test",
-                                          images + ("symbols.mem",), "tb_cpu_ext_ram",
-                                          ["USE_CACHE=0"]),
-        "tb_cpu_ext_ram_c": firmware_test("ext_ram_test", fw_build / "ext_ram_test",
-                                          images + ("symbols.mem",), "tb_cpu_ext_ram",
-                                          ["USE_CACHE=1"]),
-        "tb_cpu_fir_1000": firmware_test("fir_1000", fw_build / "fir_1000",
-                                         images + ("symbols.mem",), "tb_cpu_fir_1000",
-                                         ["USE_CACHE=0"], fir_1000_data, 1800),
-        "tb_cpu_fir_1000_c": firmware_test("fir_1000", fw_build / "fir_1000",
-                                           images + ("symbols.mem",), "tb_cpu_fir_1000",
-                                           ["USE_CACHE=1"], fir_1000_data, 1800),
-        # Timer IRQ: firmware/timer_irq_test.c (startup_irq.S, vector 0x10, ISR, ACK, mret)
-        "tb_cpu_timer_irq_a": firmware_test("timer_irq_test", fw_build / "timer_irq_test",
-                                            images + ("symbols.mem",), "tb_cpu_timer_irq",
-                                            ["EXT_RAM=0"]),
-        "tb_cpu_timer_irq_b": firmware_test("timer_irq_test", fw_build / "timer_irq_test",
-                                            images + ("symbols.mem",), "tb_cpu_timer_irq",
-                                            ["EXT_RAM=1", "USE_CACHE=0"]),
-        "tb_cpu_timer_irq_c": firmware_test("timer_irq_test", fw_build / "timer_irq_test",
-                                            images + ("symbols.mem",), "tb_cpu_timer_irq",
-                                            ["EXT_RAM=1", "USE_CACHE=1"]),
-        # Giai đoạn 3: Timer IRQ 10 kHz -> 32 mẫu FIR, FIR IRQ (firmware/fir_timer.c);
-        # _stress: PERIOD 100 clock, cố ý quá tải (tick gộp, trễ, Timer+FIR cùng pending)
-        "tb_cpu_fir_timer": firmware_test("fir_timer", fw_build / "fir_timer",
-                                          images + ("symbols.mem",), "tb_cpu_fir_timer",
-                                          ["PERIOD=10000", "STRESS=0"]),
-        "tb_cpu_fir_timer_stress": firmware_test("fir_timer_stress", fw_build / "fir_timer_stress",
-                                                 images + ("symbols.mem",), "tb_cpu_fir_timer",
-                                                 ["PERIOD=100", "STRESS=1"]),
-        # Giai đoạn 4: Timer IRQ 10 kHz -> 1000 mẫu RAM ngoài -> FIR IRQ -> RAM ngoài (~10 M chu kỳ)
         "tb_cpu_fir_timer_1000_b": firmware_test("fir_timer_1000", fw_build / "fir_timer_1000",
                                                  images + ("symbols.mem",), "tb_cpu_fir_timer_1000",
                                                  ["USE_CACHE=0"], fir_1000_data, 3600),
@@ -335,8 +269,6 @@ def main():
             sim_timeout = cfg["timeout"]
             source_dir = args.firmware_src
             if top == "tb_cpu_fir_timer_1000":
-                if args.no_firmware_build:
-                    raise RuntimeError("Timer/FIR 1000 requires rebuild with its run-specific dataset header")
                 # Generate all fixtures AND the firmware header together in this run directory.
                 # Never reuse a tracked noise checksum with a different input or expected file.
                 from gen_fir_1000_data import build as build_vectors
@@ -354,17 +286,16 @@ def main():
                 if not data.is_file():
                     raise RuntimeError(f"{data} missing; run scripts/gen_fir_1000_data.py")
                 shutil.copy2(data, directory / data.name)
-            if not args.no_firmware_build:
-                toolchain = vivado.parent / "gnu" / "riscv" / "nt" / "bin"
-                command = [sys.executable, str(project / "scripts" / "build_firmware.py"),
-                           "--firmware", firmware, "--out", str(firmware_build)]
-                if source_dir:
-                    command += ["--src", str(source_dir)]
-                if toolchain.is_dir():
-                    command += ["--toolchain", str(toolchain)]
-                print("Building firmware", flush=True)
-                if subprocess.run(command).returncode != 0:
-                    raise RuntimeError(f"firmware build failed; see {firmware_build / 'build_report.txt'}")
+            toolchain = vivado.parent / "gnu" / "riscv" / "nt" / "bin"
+            command = [sys.executable, str(project / "scripts" / "build_firmware.py"),
+                       "--firmware", firmware, "--out", str(firmware_build)]
+            if source_dir:
+                command += ["--src", str(source_dir)]
+            if toolchain.is_dir():
+                command += ["--toolchain", str(toolchain)]
+            print("Building firmware", flush=True)
+            if subprocess.run(command).returncode != 0:
+                raise RuntimeError(f"firmware build failed; see {firmware_build / 'build_report.txt'}")
             for image in firmware_files:
                 if not (firmware_build / image).is_file():
                     raise RuntimeError(f"{firmware_build / image} missing; run scripts/build_firmware.py")

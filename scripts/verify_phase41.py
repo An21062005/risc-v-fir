@@ -10,12 +10,11 @@ import sys
 
 PROJECT = Path(__file__).resolve().parent.parent
 DATASETS = ("test_01_low", "test_02_high", "test_03_mixed", "test_04_noise", "test_05_impulse", "test_06_step")
-REGRESSION = """tb_fir11_wrapper tb_fir11_vectors tb_axi_fir tb_ext_ram_cfgA
+REGRESSION = """tb_fir11_wrapper tb_fir11_vectors tb_axi_fir tb_axi_fault tb_ext_ram_cfgA
 tb_ext_ram_axi_b tb_ext_ram_axi_c tb_cpu_bus_b tb_cpu_bus_c tb_timer
-tb_irq_ack tb_cpu_fault_b tb_cpu_fault_c tb_cpu_firmware tb_cpu_fir_firmware
-tb_cpu_fir_stream tb_cpu_ext_ram_b tb_cpu_ext_ram_c tb_cpu_fir_1000 tb_cpu_fir_1000_c
-tb_cpu_timer_irq_a tb_cpu_timer_irq_b tb_cpu_timer_irq_c tb_cpu_fir_timer
-tb_cpu_fir_timer_stress tb_cpu_fir_timer_1000_b tb_cpu_fir_timer_1000_c""".split()
+tb_irq_ack tb_cpu_fault_b tb_cpu_fault_c tb_id_ex_reg tb_cpu_flush_hold_b
+tb_cpu_flush_hold_c tb_irq_i1 tb_cpu_irq_c4_a tb_cpu_irq_c4_b tb_cpu_irq_c4_c
+tb_cpu_fir_timer_1000_b tb_cpu_fir_timer_1000_c""".split()
 
 
 def validate_artifacts(directory, dataset="test_04_noise"):
@@ -54,7 +53,7 @@ def main():
         jobs = [(f"tb_cpu_fir_timer_1000_{case}_{cache}", [], None)
                 for case in ("stress", "reset", "late") for cache in ("b", "c")]
     elif args.suite == "regression":
-        # A single runner serializes builds of shared legacy firmware images.
+        # Run the block checks and the main application in B/C.
         jobs = [("regression", ["--tests", *REGRESSION], None)]
     else:
         sources = output / "stopped_clock_sources"

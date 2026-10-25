@@ -1,36 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-build_firmware.py - build firmware C cho rvcore32_pipeline_soc và xuất program.mem / data.mem.
+"""Build the main 1000-sample Timer/FIR IRQ firmware for rvcore32_pipeline_soc.
 
-Firmware (--firmware, cùng startup.S + linker.ld, mỗi firmware một thư mục kết quả riêng):
-  smoke      (mặc định) main.c      -> firmware/build/            firmware.elf/.dis/.map  (Bước 1)
-  fir_smoke             fir_smoke.c -> firmware/build/fir_smoke/  fir_smoke.elf/.dis/.map (Bước 2)
-  fir_stream            fir_stream.c -> firmware/build/fir_stream/ fir_stream.elf/.dis/.map (Bước 3)
-                        + symbols.mem: địa chỉ fir_input/fir_output/... đọc từ ELF cho testbench
-  ext_ram_test          ext_ram_test.c -> firmware/build/ext_ram_test/ (Bước 4a: lw/sw RAM ngoài)
-  fir_1000              fir_1000.c -> firmware/build/fir_1000/ (Bước 4: 1000 mẫu trong RAM ngoài)
-  fir_timer             fir_timer.c + startup_irq.S + linker_irq.ld -> firmware/build/fir_timer/
-                        (Giai đoạn 3: Timer IRQ 10 kHz -> 32 mẫu FIR, FIR IRQ); fir_timer_stress: PERIOD 100
-  fir_timer_1000        fir_timer_1000.c (Giai đoạn 4: 1000 mẫu RAM ngoài, Timer IRQ + FIR IRQ, không regtest)
-  timer_irq_test        timer_irq_test.c + startup_irq.S + linker_irq.ld -> firmware/build/timer_irq_test/
-                        (Timer IRQ: vector 0x10, ISR, ACK, mret). Firmware DUY NHẤT được dùng mret,
-                        và chỉ đúng tại __trap_mret; symbols.mem có cả địa chỉ IMEM (vùng ISR).
+  python scripts/build_firmware.py
+  python scripts/build_firmware.py --firmware fir_timer_1000_stress
 
-Các bước:
-  1. GCC (toolchain RISC-V đi kèm Vivado) build firmware/startup.S + <nguồn C> -> <tên>.elf
-  2. Kiểm tra ELF: ELF32 RISC-V, little-endian, không RVC, ABI ilp32, entry = 0x0
-  3. Kiểm tra từng section nằm đúng vùng: lệnh trong IMEM, dữ liệu trong DMEM
-  4. Disassembly (objdump) -> <tên>.dis
-  5. Kiểm tra ISA: giải mã TỪNG word trong section thực thi, chỉ cho phép lệnh mà
-     CPU giải mã đúng (xem SUPPORTED bên dưới). Có lệnh khác -> báo lỗi, không xuất .mem
-  6. Xuất program.mem (256 word, phần trống = NOP) và data.mem (256 word, phần trống = 0),
-     mỗi dòng một word hex 32-bit cho $readmemh
+Sources: firmware/fir_timer_1000.c, fir_timer_isr.h, soc_mmio.h,
+fir_1000_data.h, startup_irq.S and linker_irq.ld.
+Outputs: firmware/build/fir_timer_1000/{program.mem,data.mem,symbols.mem},
+plus ELF, disassembly, map and build report. The stress variant uses the same
+sources with PERIOD=100 and a separate output directory.
 
-Kết quả nằm trong firmware/build/ (không đụng fixture của regression trong outfeed/).
-
-Chạy:  python scripts/build_firmware.py [--firmware smoke|fir_smoke|fir_stream|ext_ram_test|fir_1000]
-                                       [--toolchain DIR] [--opt -Os]
+The builder checks ELF layout, IMEM/DMEM bounds and every instruction against
+the CPU's supported RV32I subset before emitting memory images.
 """
 
 import argparse
@@ -47,44 +29,15 @@ DEFAULT_OUT = FW_DIR / "build"
 DEFAULT_TOOLCHAIN = Path("D:/vivado/2026.1/gnu/riscv/nt/bin")
 PREFIX = "riscv64-unknown-elf-"
 
-# Bản đồ bộ nhớ của CPU (rtl/CPU/cpu.v, rtl/cpu_soc.v) và quy ước của firmware/linker.ld
+# CPU memory map; firmware/linker_irq.ld is checked against these limits.
 IMEM_BASE, IMEM_WORDS = 0x0000_0000, 256
 DMEM_BASE, DMEM_WORDS = 0x1000_0000, 256
 RESET_PC = 0x0000_0000
 NOP = 0x0000_0013
 
-# Firmware: nguồn C (cùng startup.S, linker.ld), thư mục kết quả và tên ELF/.dis/.map.
-# Thư mục kết quả tách riêng để program.mem / data.mem của các firmware không đè nhau.
-# symbols: địa chỉ ghi vào symbols.mem (một word/dòng, đúng thứ tự) cho testbench.
-FIRMWARES = {
-    "smoke":      dict(c_src="main.c",       out=DEFAULT_OUT,                stem="firmware",   symbols=[]),
-    "fir_smoke":  dict(c_src="fir_smoke.c",  out=DEFAULT_OUT / "fir_smoke",  stem="fir_smoke",  symbols=[]),
-    "fir_stream": dict(c_src="fir_stream.c", out=DEFAULT_OUT / "fir_stream", stem="fir_stream",
-                       symbols=["fir_input", "fir_output", "fir_expected", "__stack_limit", "__stack_top"]),
-    "ext_ram_test": dict(c_src="ext_ram_test.c", out=DEFAULT_OUT / "ext_ram_test", stem="ext_ram_test",
-                         symbols=["__stack_limit", "__stack_top"]),
-    "fir_1000":   dict(c_src="fir_1000.c",   out=DEFAULT_OUT / "fir_1000",   stem="fir_1000",
-                       symbols=["__stack_limit", "__stack_top"]),
-    # startup/linker riêng; allow_mret: mret (rtl/cpu_soc.v hỗ trợ) chỉ được ở symbol __trap_mret
-    "timer_irq_test": dict(c_src="timer_irq_test.c", out=DEFAULT_OUT / "timer_irq_test",
-                           stem="timer_irq_test", startup="startup_irq.S", linker="linker_irq.ld",
-                           allow_mret=True,
-                           symbols=["irq_count", "spurious_count", "__stack_limit", "__stack_top",
-                                    "__trap_entry", "__trap_mret", "__isr_end",
-                                    "__regtest_loop", "__regtest_exit"]),
-}
-# Giai đoạn 3: Timer IRQ điều phối 32 mẫu FIR, FIR IRQ báo kết quả (startup_irq.S dùng chung)
-_FIR_TIMER = dict(c_src="fir_timer.c", startup="startup_irq.S", linker="linker_irq.ld", allow_mret=True,
-                  symbols=["fst", "fir_input", "fir_output",
-                           "__stack_limit", "__stack_top", "__trap_entry", "__trap_mret", "__isr_end",
-                           "__regtest_loop", "__regtest_exit"])
-_IRQ_DEFS = ["IRQ_C_HANDLER=irq_handler", "REGTEST_COUNTER=fst+8", "REGTEST_NO_EXT_RAM"]
-FIRMWARES["fir_timer"] = dict(_FIR_TIMER, out=DEFAULT_OUT / "fir_timer", stem="fir_timer",
-                              defines=_IRQ_DEFS)
-# cố ý quá tải (PERIOD 100 clock < thời gian xử lý 1 mẫu): tick gộp, trễ, Timer+FIR cùng pending
-FIRMWARES["fir_timer_stress"] = dict(_FIR_TIMER, out=DEFAULT_OUT / "fir_timer_stress", stem="fir_timer_stress",
-                                     defines=_IRQ_DEFS + ["FIR_TIMER_PERIOD=100u", "FIR_TIMER_STRESS"])
-# Giai đoạn 4: 1000 mẫu trong RAM ngoài, cùng ISR (fir_timer_isr.h), không có vòng kiểm tra thanh ghi
+# One application; stress changes only the timer period for verification.
+FIRMWARES = {}
+_IRQ_DEFS = ["IRQ_C_HANDLER=irq_handler"]
 FIRMWARES["fir_timer_1000"] = dict(c_src="fir_timer_1000.c", startup="startup_irq.S", linker="linker_irq.ld",
                                    allow_mret=True, out=DEFAULT_OUT / "fir_timer_1000", stem="fir_timer_1000",
                                    defines=_IRQ_DEFS,
@@ -252,20 +205,17 @@ def main():
     ap.add_argument("--toolchain", type=Path,
                     default=Path(os.environ.get("RISCV_TOOLCHAIN", DEFAULT_TOOLCHAIN)),
                     help=f"thư mục chứa {PREFIX}gcc.exe (mặc định {DEFAULT_TOOLCHAIN}, hoặc biến RISCV_TOOLCHAIN)")
-    ap.add_argument("--firmware", choices=sorted(FIRMWARES), default="smoke",
-                    help="smoke = main.c (Bước 1, mặc định), fir_smoke = fir_smoke.c (Bước 2), "
-                         "fir_stream = fir_stream.c (Bước 3), ext_ram_test / fir_1000 (Bước 4), "
-                         "timer_irq_test (Timer IRQ)")
+    ap.add_argument("--firmware", choices=sorted(FIRMWARES), default="fir_timer_1000",
+                    help="main application (default) or its overload verification build")
     ap.add_argument("--src", type=Path, default=FW_DIR,
-                    help="thư mục chứa startup*.S, <nguồn C>, linker*.ld (mặc định firmware/)")
+                    help="firmware source directory (default: firmware/)")
     ap.add_argument("--out", type=Path,
-                    help="thư mục kết quả (mặc định firmware/build cho smoke, "
-                         "firmware/build/fir_smoke cho fir_smoke)")
+                    help="output directory (default: firmware/build/<firmware>)")
     ap.add_argument("--opt", default="-Os", help="mức tối ưu (mặc định -Os: IMEM chỉ 1 KB)")
     args = ap.parse_args()
 
     fw = FIRMWARES[args.firmware]
-    startup, linker = fw.get("startup", "startup.S"), fw.get("linker", "linker.ld")
+    startup, linker = fw["startup"], fw["linker"]
     defines = [f"-D{d}" for d in fw.get("defines", [])]    # áp cho cả startup .S và nguồn C
     allow_mret = fw.get("allow_mret", False)
     out = (args.out or fw["out"]).resolve()
@@ -289,7 +239,8 @@ def main():
     try:
         # ---- 1. Build ----
         version = run([tool("gcc"), "--version"], log).splitlines()[0]
-        run([tool("gcc"), *CFLAGS, *defines, args.opt, "-T", src / linker, *LDFLAGS,
+        includes = ["-I", src]
+        run([tool("gcc"), *CFLAGS, *defines, *includes, args.opt, "-T", src / linker, *LDFLAGS,
              f"-Wl,-Map={map_path}", src / startup, src / fw["c_src"], "-o", elf_path], log)
 
         # ---- 2. ELF header ----

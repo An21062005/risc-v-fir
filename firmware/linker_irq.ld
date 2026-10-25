@@ -1,15 +1,8 @@
 /*
- * linker_irq.ld - bố trí bộ nhớ cho firmware kiểm tra Timer IRQ (timer_irq_test.c +
- * startup_irq.S). Giống linker.ld (giữ nguyên, dùng cho firmware cũ), khác ở .text:
- *   0x00          _start (j _reset)
- *   0x10          __trap_entry = TRAP_VECTOR cố định của rvcore32_pipeline_soc
- *   ngay sau đó   .text.isr (timer_isr) -> __isr_end
- *   còn lại       reset, main, reg_integrity_run, ...
- * [__trap_entry, __isr_end) là toàn bộ mã chạy trong ngữ cảnh ngắt; testbench dùng
- * vùng này (qua symbols.mem) để phân biệt truy cập bus/DMEM của ISR và của main.
- *
- * Phần còn lại (IMEM/DMEM 1 KB, .signature ở đầu DMEM, stack 256 byte ở cuối DMEM)
- * xem chú thích trong linker.ld.
+ * Memory layout for fir_timer_1000.c and startup_irq.S.
+ * IMEM 1 KB: _start at 0x00, __trap_entry at 0x10, then .text.isr,
+ * reset and main. [__trap_entry, __isr_end) identifies interrupt code.
+ * DMEM 1 KB: signature, rodata/data/bss, and a 256-byte stack at the top.
  */
 OUTPUT_ARCH(riscv)
 ENTRY(_start)

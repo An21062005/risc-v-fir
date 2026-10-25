@@ -1,4 +1,4 @@
-FIR 1000 mẫu - dữ liệu Bước 4 (SINH TỰ ĐỘNG bởi scripts/gen_fir_1000_data.py)
+FIR 1000 mẫu - dữ liệu luồng chính (SINH TỰ ĐỘNG bởi scripts/gen_fir_1000_data.py)
 Nguồn input    : data_test/fir_test/output/test_04_noise/input.dat  mẫu [0, 1000)  sha256 e58b9c5a11a1d23ce4659d13db0b17e9d298d68c4fbd26c83bf223722ddf76e3
 Đối chiếu      : data_test/fir_test/output/test_04_noise/expected.dat  1000/1000 mẫu khớp mô hình #1  sha256 c3fbc5731ec41134d7f410185b0bbb993e36cb386c5b73a593baf26d3a87e83a
 Hệ số          : [54, 0, -92, 0, 313, 500, 313, 0, -92, 0, 54] (hls/FIR11/FIR11/fir.cpp)
@@ -15,6 +15,6 @@ sha256 input.mem    : 873ad831e64f5a4672ae39067bc8cc897ff23d5becb489ff6d6d80bf38
 sha256 expected.mem : f01d683186623ed031516977b0087e9e19f941a415cfe022d12d1d05a5f3ca9d
 sha256 layout.mem   : b55549f4ce58f0942885a22f3abbf1706b0d73e8d952ae062e19c283b5408f96
 
-Nạp dữ liệu: MÔ PHỎNG - tb/tb_cpu_fir_1000.v ghi input.mem vào sdram_model trước khi thả reset
+Nạp dữ liệu: MÔ PHỎNG - tb/tb_cpu_fir_timer_1000.v ghi input.mem vào sdram_model trước khi thả reset
 (sdram_model không có $readmemh). FPGA thật cần cơ chế khác (bootloader/UART/DMA hoặc BRAM
 khởi tạo), chưa có trong SoC.

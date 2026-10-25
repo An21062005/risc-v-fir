@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-gen_fir_1000_data.py - dữ liệu cho Bước 4 (firmware/fir_1000.c, tb/tb_cpu_fir_1000.v).
+gen_fir_1000_data.py - dữ liệu cho firmware/fir_timer_1000.c và tb/tb_cpu_fir_timer_1000.v.
 
 Nguồn: data_test/fir_test/output/<test>/input.dat (mặc định test_04_noise: tín hiệu
 trộn + nhiễu Gauss, có dấu), lấy đúng 1000 mẫu đầu [0, 1000).
 
-Expected: mô hình #1 = fir_model() của scripts/gen_fir_stream_data.py
+Expected: mô hình #1 = fir_model() trong file này
   y[n] = sum_{k=0..10} c[k] * x[n-k], lịch sử ban đầu = 0, int32 wrap modulo 2^32
   (đúng RTL HLS). Đối chiếu thêm với expected.dat của bộ dữ liệu (do
   data_test/fir_test/generate_fir_data.py tính bằng numpy + Python thuần): phải khớp 1000/1000.
@@ -33,8 +33,25 @@ import sys
 from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT / "scripts"))
-from gen_fir_stream_data import COEF, fir_model  # noqa: E402  (mô hình #1, Bước 3)
+COEF = [54, 0, -92, 0, 313, 500, 313, 0, -92, 0, 54]
+
+
+def s32(v):
+    v &= 0xFFFFFFFF
+    return v - (1 << 32) if v & 0x80000000 else v
+
+
+def fir_model(xs, taps=COEF):
+    hist = [0] * len(taps)
+    out = []
+    for x in xs:
+        hist = [x] + hist[:-1]
+        acc = 0
+        for c, h in zip(taps, hist):
+            acc = s32(acc + s32(c * h))
+        out.append(acc)
+    return out
+
 
 N = 1000
 IN_ADDR = 0x4001_0000
@@ -93,7 +110,7 @@ def build(test):
     digest = {n: hashlib.sha256(t.encode()).hexdigest() for n, t in files.items()}
     rel = lambda p: p.relative_to(PROJECT).as_posix()
     files["manifest.txt"] = "\n".join([
-        "FIR 1000 mẫu - dữ liệu Bước 4 (SINH TỰ ĐỘNG bởi scripts/gen_fir_1000_data.py)",
+        "FIR 1000 mẫu - dữ liệu luồng chính (SINH TỰ ĐỘNG bởi scripts/gen_fir_1000_data.py)",
         f"Nguồn input    : {rel(src_in)}  mẫu [0, {N})  sha256 {sha256(src_in)}",
         f"Đối chiếu      : {rel(src_exp)}  {match}/{N} mẫu khớp mô hình #1  sha256 {sha256(src_exp)}",
         f"Hệ số          : {COEF} (hls/FIR11/FIR11/fir.cpp)",
@@ -109,7 +126,7 @@ def build(test):
         f"EXP_XOR        : 0x{exp_xor:08x}  (XOR các y)",
         *[f"sha256 {n:<13}: {d}" for n, d in digest.items()],
         "",
-        "Nạp dữ liệu: MÔ PHỎNG - tb/tb_cpu_fir_1000.v ghi input.mem vào sdram_model trước khi thả reset",
+        "Nạp dữ liệu: MÔ PHỎNG - tb/tb_cpu_fir_timer_1000.v ghi input.mem vào sdram_model trước khi thả reset",
         "(sdram_model không có $readmemh). FPGA thật cần cơ chế khác (bootloader/UART/DMA hoặc BRAM",
         "khởi tạo), chưa có trong SoC.",
         "",
